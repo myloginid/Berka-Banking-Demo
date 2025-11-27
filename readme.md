@@ -76,6 +76,11 @@ This folder contains the Berka Czech bank dataset used for the CDP Public Cloud 
 
 These structures form the core relational model for the POC: clients live in districts, hold accounts, are linked via dispositions, can have cards and loans, and generate orders and transactions that drive downstream analytics, BI, and ML use cases in CDP.
 
+## Date Conventions
+
+- Historic dates in the original Berka CSVs have been re-based to the year 2025 so that the dataset looks “current” for the POC (for example, `930101` → `250101`, corresponding to 2025‑01‑01).  
+- Date fields remain encoded as `YYMMDD` (or `YYMMDD hh:mm:ss` for card issue timestamps), preserving original month/day patterns while shifting the calendar year.
+
 ## Logical ER Model
 
 At a logical level:
@@ -156,4 +161,3 @@ erDiagram
         string account
     }
 ```
-
