@@ -162,6 +162,146 @@ erDiagram
     }
 ```
 
+## Lakehouse Layers ER (Bronze, Silver, Gold)
+
+The same entities are modeled across Bronze (raw/staged), Silver (cleaned), and Gold (Iceberg) layers for both dimensions and facts.
+
+```mermaid
+erDiagram
+    %% Dimensions
+    B_CLIENT ||--o{ S_CLIENT : "cleansed to"
+    S_CLIENT ||--o{ DIM_CLIENT : "SCD2 to"
+
+    B_ACCOUNT ||--o{ S_ACCOUNT : "cleansed to"
+    S_ACCOUNT ||--o{ DIM_ACCOUNT : "SCD2 to"
+
+    B_DISTRICT ||--o{ S_DISTRICT : "cleansed to"
+    S_DISTRICT ||--o{ DIM_DISTRICT : "SCD2 to"
+
+    B_DISP ||--o{ S_DISP : "cleansed to"
+    S_DISP ||--o{ DIM_DISP : "SCD2 to"
+
+    B_CARD ||--o{ S_CARD : "cleansed to"
+    S_CARD ||--o{ DIM_CARD : "SCD2 to"
+
+    %% Facts
+    KAFKA_LOAN ||--o{ F_LOAN_SILVER : "streamed to"
+    F_LOAN_SILVER ||--o{ F_LOAN_GOLD : "Iceberg fact"
+
+    KAFKA_ORDER ||--o{ F_ORDER_SILVER : "streamed to"
+    F_ORDER_SILVER ||--o{ F_ORDER_GOLD : "Iceberg fact"
+
+    KAFKA_TRANS ||--o{ F_TRANS_SILVER : "streamed to"
+    F_TRANS_SILVER ||--o{ F_TRANS_GOLD : "Iceberg fact"
+
+    %% Dim–fact relationships in Gold
+    DIM_CLIENT ||--o{ DIM_ACCOUNT : "holds account"
+    DIM_ACCOUNT ||--o{ F_LOAN_GOLD : "loan on account"
+    DIM_ACCOUNT ||--o{ F_ORDER_GOLD : "order on account"
+    DIM_ACCOUNT ||--o{ F_TRANS_GOLD : "trans on account"
+
+    B_CLIENT {
+      string layer "bronze"
+      string table "bronze.client_bronze"
+    }
+    S_CLIENT {
+      string layer "silver"
+      string table "silver.client_silver"
+    }
+    DIM_CLIENT {
+      string layer "gold"
+      string table "gold.dim_client"
+    }
+
+    B_ACCOUNT {
+      string layer "bronze"
+      string table "bronze.account_bronze"
+    }
+    S_ACCOUNT {
+      string layer "silver"
+      string table "silver.account_silver"
+    }
+    DIM_ACCOUNT {
+      string layer "gold"
+      string table "gold.dim_account"
+    }
+
+    B_DISTRICT {
+      string layer "bronze"
+      string table "bronze.district_bronze"
+    }
+    S_DISTRICT {
+      string layer "silver"
+      string table "silver.district_silver"
+    }
+    DIM_DISTRICT {
+      string layer "gold"
+      string table "gold.dim_district"
+    }
+
+    B_DISP {
+      string layer "bronze"
+      string table "bronze.disp_bronze"
+    }
+    S_DISP {
+      string layer "silver"
+      string table "silver.disp_silver"
+    }
+    DIM_DISP {
+      string layer "gold"
+      string table "gold.dim_disp"
+    }
+
+    B_CARD {
+      string layer "bronze"
+      string table "bronze.card_bronze"
+    }
+    S_CARD {
+      string layer "silver"
+      string table "silver.card_silver"
+    }
+    DIM_CARD {
+      string layer "gold"
+      string table "gold.dim_card"
+    }
+
+    KAFKA_LOAN {
+      string source "kafka.berka_loans"
+    }
+    F_LOAN_SILVER {
+      string layer "silver"
+      string table "silver.fact_loan_silver"
+    }
+    F_LOAN_GOLD {
+      string layer "gold"
+      string table "gold.fact_loan"
+    }
+
+    KAFKA_ORDER {
+      string source "kafka.berka_orders"
+    }
+    F_ORDER_SILVER {
+      string layer "silver"
+      string table "silver.fact_order_silver"
+    }
+    F_ORDER_GOLD {
+      string layer "gold"
+      string table "gold.fact_order"
+    }
+
+    KAFKA_TRANS {
+      string source "kafka.berka_trans"
+    }
+    F_TRANS_SILVER {
+      string layer "silver"
+      string table "silver.fact_trans_silver"
+    }
+    F_TRANS_GOLD {
+      string layer "gold"
+      string table "gold.fact_trans"
+    }
+```
+
 ## Streaming Data Generator (Kafka)
 
 - The Berka streaming generator sends synthetic loan, order, and transaction events to Kafka topics.  
