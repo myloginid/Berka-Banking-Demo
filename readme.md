@@ -525,6 +525,7 @@ flowchart TD
 
     DIM_CLIENT_G["gold.dim_client"]
     DIM_ACCOUNT_G["gold.dim_account"]
+    LOAN_SCORES_G["gold.loan_default_scores"]
 
     %% Streaming job
     C360_STREAM["customer_360_hbase_streaming.py"]
@@ -539,6 +540,7 @@ flowchart TD
 
     DIM_CLIENT_G --> C360_STREAM
     DIM_ACCOUNT_G --> C360_STREAM
+    LOAN_SCORES_G --> C360_STREAM
 
     C360_STREAM --> HBASE_C360
 ```

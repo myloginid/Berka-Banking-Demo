@@ -91,10 +91,13 @@ def parse_args() -> argparse.Namespace:
 
 def init_dimension_views(spark: SparkSession, args: argparse.Namespace) -> None:
     """
-    Create temporary views for the current snapshot of client and account dimensions.
+    Create temporary views for the current snapshot of client and account dimensions,
+    and the latest loan default scores per client.
     """
     dim_client_table = f"{args.gold_db}.dim_client"
     dim_account_table = f"{args.gold_db}.dim_account"
+    fact_loan_table = f"{args.gold_db}.fact_loan"
+    loan_scores_table = f"{args.gold_db}.loan_default_scores"
 
     spark.sql(
         f"""
@@ -111,6 +114,32 @@ def init_dimension_views(spark: SparkSession, args: argparse.Namespace) -> None:
         SELECT *
         FROM {dim_account_table}
         WHERE is_current = TRUE
+        """
+    )
+
+    # Latest loan default score per client (if scoring has been run).
+    spark.sql(
+        f"""
+        CREATE OR REPLACE TEMP VIEW loan_default_score_per_client AS
+        WITH scored AS (
+          SELECT
+            fl.client_id,
+            lds.pred_status,
+            lds.score_timestamp,
+            ROW_NUMBER() OVER (
+              PARTITION BY fl.client_id
+              ORDER BY lds.score_timestamp DESC
+            ) AS rn
+          FROM {loan_scores_table} lds
+          JOIN {fact_loan_table} fl
+            ON fl.loan_id = lds.loan_id
+        )
+        SELECT
+          client_id,
+          pred_status,
+          score_timestamp
+        FROM scored
+        WHERE rn = 1
         """
     )
 
@@ -189,6 +218,8 @@ def process_loan_batch(spark: SparkSession, batch_df: DataFrame, batch_id: int, 
       latest.amount              AS last_loan_amount,
       latest.status              AS last_loan_status,
       latest.ingest_ts           AS last_loan_ts,
+      s.pred_status              AS last_default_pred_status,
+      s.score_timestamp          AS last_default_score_ts,
       CAST(NULL AS DOUBLE)       AS last_order_amount,
       CAST(NULL AS STRING)       AS last_order_k_symbol,
       CAST(NULL AS TIMESTAMP)    AS last_order_ts,
@@ -201,6 +232,8 @@ def process_loan_batch(spark: SparkSession, batch_df: DataFrame, batch_id: int, 
       ON latest.client_id = c.client_id
     LEFT JOIN dim_account_current a
       ON latest.account_id = a.account_id
+    LEFT JOIN loan_default_score_per_client s
+      ON latest.client_id = s.client_id
     WHERE latest.rn = 1
     """
 
@@ -417,4 +450,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
