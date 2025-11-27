@@ -161,3 +161,80 @@ erDiagram
         string account
     }
 ```
+
+## Streaming Data Generator (Kafka)
+
+- The Berka streaming generator sends synthetic loan, order, and transaction events to Kafka topics.  
+- Script: `scripts/kafka_data_generator/berka_data_generator.py` (requires `kafka-python` and a reachable Kafka broker).
+
+Example:
+- `python3 scripts/kafka_data_generator/berka_data_generator.py \`
+  ` --bootstrap-servers localhost:9092 \`
+  ` --loan-topic berka_loans --order-topic berka_orders --trans-topic berka_trans \`
+  ` --interval-seconds 10 --batch-size 10`
+
+## Dimension ETL Jobs (Bronze → Silver → Gold)
+
+All dimension ETL jobs live under `scripts/etl` and use Spark SQL only.
+
+Bronze → Silver (Parquet, Snappy):
+- District: `scripts/etl/dim_district_bronze_to_silver.py`
+- Client:   `scripts/etl/dim_client_bronze_to_silver.py`
+- Account:  `scripts/etl/dim_account_bronze_to_silver.py`
+- Disp:     `scripts/etl/dim_disp_bronze_to_silver.py`
+- Card:     `scripts/etl/dim_card_bronze_to_silver.py`
+
+Silver → Gold (Iceberg, SCD2, Parquet, Snappy):
+- District: `scripts/etl/dim_district_silver_to_gold.py`
+- Client:   `scripts/etl/dim_client_silver_to_gold.py`
+- Account:  `scripts/etl/dim_account_silver_to_gold.py`
+- Disp:     `scripts/etl/dim_disp_silver_to_gold.py`
+- Card:     `scripts/etl/dim_card_silver_to_gold.py`
+
+Examples:
+- Bronze → Silver:  
+  `spark-submit scripts/etl/dim_client_bronze_to_silver.py \`
+  ` --bronze-db bronze --silver-db silver \`
+  ` --bronze-table client_bronze --silver-table client_silver`
+
+- Silver → Gold (Iceberg SCD2):  
+  `spark-submit scripts/etl/dim_client_silver_to_gold.py \`
+  ` --silver-db silver --gold-db gold \`
+  ` --silver-table client_silver --gold-table dim_client`
+
+Run the bronze→silver jobs after NiFi has landed raw CSVs into the bronze tables; then run the silver→gold jobs to build the curated Iceberg dimensions.
+
+## Fact Streaming Jobs (Kafka → Silver → Gold)
+
+Three Spark Structured Streaming jobs consume Kafka topics and build fact tables:
+
+- Loan fact: `scripts/etl/fact_loan_streaming.py`  
+  - Reads from `--loan-topic` (default `berka_loans`).  
+  - Writes to `silver.fact_loan_silver` (Parquet, Snappy) and `gold.fact_loan` (Iceberg).
+
+- Order fact: `scripts/etl/fact_order_streaming.py`  
+  - Reads from `--order-topic` (default `berka_orders`).  
+  - Writes to `silver.fact_order_silver` and `gold.fact_order`.
+
+- Transaction fact: `scripts/etl/fact_trans_streaming.py`  
+  - Reads from `--trans-topic` (default `berka_trans`).  
+  - Writes to `silver.fact_trans_silver` and `gold.fact_trans`.
+
+Each job:
+- Uses Structured Streaming with a micro-batch trigger (`--trigger-seconds`, default `30`).  
+- Uses `foreachBatch` and Spark SQL to load silver and join to `gold.dim_account` before inserting into the Iceberg gold fact.  
+- Requires a checkpoint location (`--checkpoint-location`) for state and exactly-once guarantees.
+
+Example (loan fact):
+- `spark-submit scripts/etl/fact_loan_streaming.py \`
+  ` --bootstrap-servers localhost:9092 --loan-topic berka_loans \`
+  ` --silver-db silver --silver-table fact_loan_silver \`
+  ` --gold-db gold --gold-table fact_loan \`
+  ` --checkpoint-location /tmp/berka_fact_loan_chk \`
+  ` --trigger-seconds 30`
+
+Recommended order:
+1. Run NiFi to populate bronze tables from `./data`.  
+2. Run dimension bronze→silver and silver→gold jobs to build Iceberg dimensions.  
+3. Start the Kafka data generator for loans/orders/trans.  
+4. Start the three fact streaming jobs to continuously populate silver and gold fact tables.
