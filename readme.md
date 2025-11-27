@@ -344,6 +344,24 @@ Examples:
 
 Run the bronze→silver jobs after NiFi has landed raw CSVs into the bronze tables; then run the silver→gold jobs to build the curated Iceberg dimensions.
 
+### Dimension Load Order and PK/FK Checks
+
+To satisfy primary/foreign key relationships and the built‑in data quality checks:
+
+1. **Bronze → Silver (dimensions)**  
+   1. `dim_district_bronze_to_silver.py` – establishes `silver.district_silver` (district PKs).  
+   2. `dim_client_bronze_to_silver.py` – loads `silver.client_silver` and only keeps rows whose `district_id` exists in `silver.district_silver` (FK check); invalid/missing districts are written to `silver.dq_client`.  
+   3. `dim_account_bronze_to_silver.py` – loads `silver.account_silver` and enforces `district_id` FK to `silver.district_silver`; failures go to `silver.dq_account`.  
+   4. `dim_disp_bronze_to_silver.py` – cleans dispositions after client/account are present in silver; additional DQ for malformed IDs goes to `silver.dq_disp`.  
+   5. `dim_card_bronze_to_silver.py` – cleans card data; DQ issues go to `silver.dq_card`.
+
+2. **Silver → Gold (dimensions, Iceberg SCD2)**  
+   1. `dim_district_silver_to_gold.py` – builds `gold.dim_district`.  
+   2. `dim_client_silver_to_gold.py` – builds `gold.dim_client` (FK to `gold.dim_district`).  
+   3. `dim_account_silver_to_gold.py` – builds `gold.dim_account` (FK to `gold.dim_district`).  
+   4. `dim_disp_silver_to_gold.py` – builds `gold.dim_disp` and must run after `dim_client` and `dim_account` so that relationships between clients and accounts are valid.  
+   5. `dim_card_silver_to_gold.py` – builds `gold.dim_card` after `dim_disp`.
+
 ## Fact Streaming Jobs (Kafka → Silver → Gold)
 
 Three Spark Structured Streaming jobs consume Kafka topics and build fact tables:

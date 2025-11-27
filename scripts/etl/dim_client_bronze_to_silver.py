@@ -65,7 +65,7 @@ def main() -> None:
           birth_number STRING,
           district_id  STRING,
           dq_date      DATE,
-          dq_reason    STRING
+      dq_reason    STRING
         )
         USING parquet
         TBLPROPERTIES ('parquet.compression' = 'snappy')
@@ -86,12 +86,17 @@ def main() -> None:
       birth_number,
       district_id,
       current_date    AS dq_date,
-      'Invalid client_id/district_id format or missing birth_number' AS dq_reason
-    FROM {bronze_table_full}
+      'Invalid client_id/district_id format, missing birth_number, or unknown district_id' AS dq_reason
+    FROM {bronze_table_full} b
     WHERE NOT (
-      client_id  RLIKE '^[0-9]+$' AND
-      district_id RLIKE '^[0-9]+$' AND
-      birth_number IS NOT NULL AND birth_number <> ''
+      b.client_id   RLIKE '^[0-9]+$' AND
+      b.district_id RLIKE '^[0-9]+$' AND
+      b.birth_number IS NOT NULL AND b.birth_number <> '' AND
+      EXISTS (
+        SELECT 1
+        FROM {args.silver_db}.district_silver d
+        WHERE CAST(b.district_id AS INT) = d.district_id
+      )
     )
     """
     spark.sql(dq_insert_sql)
@@ -101,14 +106,19 @@ def main() -> None:
     USING parquet
     TBLPROPERTIES ('parquet.compression' = 'snappy') AS
     SELECT
-      CAST(client_id AS INT)   AS client_id,
-      birth_number             AS birth_number,
-      CAST(district_id AS INT) AS district_id
-    FROM {bronze_table_full}
-    WHERE client_id  RLIKE '^[0-9]+$'
-      AND district_id RLIKE '^[0-9]+$'
-      AND birth_number IS NOT NULL
-      AND birth_number <> ''
+      CAST(b.client_id AS INT)   AS client_id,
+      b.birth_number             AS birth_number,
+      CAST(b.district_id AS INT) AS district_id
+    FROM {bronze_table_full} b
+    WHERE b.client_id   RLIKE '^[0-9]+$'
+      AND b.district_id RLIKE '^[0-9]+$'
+      AND b.birth_number IS NOT NULL
+      AND b.birth_number <> ''
+      AND EXISTS (
+        SELECT 1
+        FROM {args.silver_db}.district_silver d
+        WHERE CAST(b.district_id AS INT) = d.district_id
+      )
     """
 
     spark.sql(create_silver_sql)
