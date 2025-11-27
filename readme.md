@@ -1,8 +1,14 @@
-# Berka Banking Dataset (`./data`)
+# Berka Banking Demo
 
-This folder contains the Berka Czech bank dataset used for the CDP Public Cloud POC. Each CSV represents an entity in the retail banking domain (clients, accounts, products, and transactions).
+This project demonstrates an end‑to‑end banking data pipeline on CDP Public Cloud using the Berka dataset. It shows how raw CSVs flow into a lakehouse (Bronze/Silver/Gold with Iceberg), are enriched into dimensions and facts, and are then consumed by streaming and BI workloads.
 
-## Files and Schemas
+---
+
+## 1. Source Dataset (`./data`)
+
+The Berka dataset is a collection of Czech bank data: customers, accounts, transactions, loans, cards, and districts.
+
+### 1.1 Files and Schemas
 
 - `account.csv`  
   - **Purpose:** Bank accounts held by clients.  
@@ -76,12 +82,14 @@ This folder contains the Berka Czech bank dataset used for the CDP Public Cloud 
 
 These structures form the core relational model for the POC: clients live in districts, hold accounts, are linked via dispositions, can have cards and loans, and generate orders and transactions that drive downstream analytics, BI, and ML use cases in CDP.
 
-## Date Conventions
+### 1.2 Date Conventions
 
 - Historic dates in the original Berka CSVs have been re-based to the year 2025 so that the dataset looks “current” for the POC (for example, `930101` → `250101`, corresponding to 2025‑01‑01).  
 - Date fields remain encoded as `YYMMDD` (or `YYMMDD hh:mm:ss` for card issue timestamps), preserving original month/day patterns while shifting the calendar year.
 
-## Logical ER Model
+---
+
+## 2. Core Logical ER Model
 
 At a logical level:
 - `district` defines geographic areas for both `client` and `account`.  
@@ -162,9 +170,16 @@ erDiagram
     }
 ```
 
-## Lakehouse Layers ER (Bronze, Silver, Gold)
+---
 
-The same entities are modeled across Bronze (raw/staged), Silver (cleaned), and Gold (Iceberg) layers for both dimensions and facts.
+## 3. Lakehouse Architecture (Bronze / Silver / Gold)
+
+The same entities are modeled across:
+- **Bronze** – raw/staged (NiFi‑landed CSVs and Kafka streams).  
+- **Silver** – cleaned and typed Parquet tables (with data quality capture).  
+- **Gold** – curated Iceberg tables (dimensions with SCD2, facts optimized for BI).
+
+### 3.1 Lakehouse Layers ER
 
 ```mermaid
 erDiagram
@@ -302,9 +317,101 @@ erDiagram
     }
 ```
 
-## Streaming Data Generator (Kafka)
+---
 
-- The Berka streaming generator sends synthetic loan, order, and transaction events to Kafka topics.  
+## 4. Dimension Pipelines
+
+All dimension ETL jobs live under `scripts/etl` and use Spark SQL only.
+
+### 4.1 Bronze → Silver (Parquet + DQ)
+
+Bronze→Silver jobs clean and type data into Parquet and, when data quality (DQ) rules fail, write offending rows into daily DQ tables.
+
+- District: `scripts/etl/dim_district_bronze_to_silver.py`  
+  - Outputs `silver.district_silver`; DQ rows go to `silver.dq_district`.
+- Client: `scripts/etl/dim_client_bronze_to_silver.py`  
+  - Outputs `silver.client_silver`; enforces `district_id` FK to `silver.district_silver`.  
+  - DQ rows (invalid IDs, missing `birth_number`, unknown `district_id`) go to `silver.dq_client`.
+- Account: `scripts/etl/dim_account_bronze_to_silver.py`  
+  - Outputs `silver.account_silver`; enforces `district_id` FK to `silver.district_silver`.  
+  - DQ rows (invalid IDs, bad `date`, unknown `district_id`) go to `silver.dq_account`.
+- Disp: `scripts/etl/dim_disp_bronze_to_silver.py`  
+  - Outputs `silver.disp_silver`; cleans malformed IDs and types.  
+  - DQ rows go to `silver.dq_disp`.
+- Card: `scripts/etl/dim_card_bronze_to_silver.py`  
+  - Outputs `silver.card_silver`; validates card IDs, disp IDs, type, and issued timestamp.  
+  - DQ rows go to `silver.dq_card`.
+
+Example:
+- `spark-submit scripts/etl/dim_client_bronze_to_silver.py \`
+  ` --bronze-db bronze --silver-db silver \`
+  ` --bronze-table client_bronze --silver-table client_silver`
+
+### 4.2 Silver → Gold (Iceberg SCD2)
+
+Silver→Gold jobs maintain SCD Type 2 Iceberg dimensions with `effective_from`, `effective_to`, `is_current`, and `scd_version`.
+
+- District: `scripts/etl/dim_district_silver_to_gold.py` → `gold.dim_district`  
+- Client: `scripts/etl/dim_client_silver_to_gold.py` → `gold.dim_client` (FK to `gold.dim_district`)  
+- Account: `scripts/etl/dim_account_silver_to_gold.py` → `gold.dim_account` (FK to `gold.dim_district`)  
+- Disp: `scripts/etl/dim_disp_silver_to_gold.py` → `gold.dim_disp` (depends on `dim_client` and `dim_account`)  
+- Card: `scripts/etl/dim_card_silver_to_gold.py` → `gold.dim_card` (depends on `dim_disp`)
+
+Example:
+- `spark-submit scripts/etl/dim_client_silver_to_gold.py \`
+  ` --silver-db silver --gold-db gold \`
+  ` --silver-table client_silver --gold-table dim_client`
+
+### 4.3 Dimension Load Order and PK/FK Checks
+
+To satisfy primary/foreign key relationships and the built‑in DQ checks:
+
+1. **Bronze → Silver (dimensions)**  
+   1. `dim_district_bronze_to_silver.py` – establishes `silver.district_silver` (district PKs).  
+   2. `dim_client_bronze_to_silver.py` – loads `silver.client_silver` and only keeps rows whose `district_id` exists in `silver.district_silver`.  
+   3. `dim_account_bronze_to_silver.py` – loads `silver.account_silver` and enforces `district_id` FK to `silver.district_silver`.  
+   4. `dim_disp_bronze_to_silver.py` – cleans dispositions after client/account are present in silver.  
+   5. `dim_card_bronze_to_silver.py` – cleans card data after `disp` is available.
+
+2. **Silver → Gold (dimensions, Iceberg SCD2)**  
+   1. `dim_district_silver_to_gold.py` – builds `gold.dim_district`.  
+   2. `dim_client_silver_to_gold.py` – builds `gold.dim_client` (FK to `gold.dim_district`).  
+   3. `dim_account_silver_to_gold.py` – builds `gold.dim_account` (FK to `gold.dim_district`).  
+   4. `dim_disp_silver_to_gold.py` – builds `gold.dim_disp` and must run after `dim_client` and `dim_account`.  
+   5. `dim_card_silver_to_gold.py` – builds `gold.dim_card` after `dim_disp`.
+
+### 4.4 Airflow‑Style Dimension DAG
+
+```mermaid
+flowchart TD
+    NIFI_BRONZE["NiFi: CSV → bronze.*"]
+
+    NIFI_BRONZE --> DIST_BRONZE["dim_district_bronze_to_silver"]
+    DIST_BRONZE --> DIST_GOLD["dim_district_silver_to_gold"]
+
+    DIST_GOLD --> CLIENT_BRONZE["dim_client_bronze_to_silver (FK → district_silver)"]
+    CLIENT_BRONZE --> CLIENT_GOLD["dim_client_silver_to_gold (FK → dim_district)"]
+
+    DIST_GOLD --> ACCOUNT_BRONZE["dim_account_bronze_to_silver (FK → district_silver)"]
+    ACCOUNT_BRONZE --> ACCOUNT_GOLD["dim_account_silver_to_gold (FK → dim_district)"]
+
+    CLIENT_GOLD --> DISP_BRONZE["dim_disp_bronze_to_silver (requires client/account/district)"]
+    ACCOUNT_GOLD --> DISP_BRONZE
+    DIST_GOLD --> DISP_BRONZE
+    DISP_BRONZE --> DISP_GOLD["dim_disp_silver_to_gold"]
+
+    DISP_GOLD --> CARD_BRONZE["dim_card_bronze_to_silver (requires disp)"]
+    CARD_BRONZE --> CARD_GOLD["dim_card_silver_to_gold"]
+```
+
+---
+
+## 5. Streaming Pipelines (Kafka → Silver → Gold)
+
+### 5.1 Kafka Data Generator
+
+The Berka streaming generator sends synthetic loan, order, and transaction events to Kafka topics.
+
 - Script: `scripts/kafka_data_generator/berka_data_generator.py` (requires `kafka-python` and a reachable Kafka broker).
 
 Example:
@@ -313,56 +420,7 @@ Example:
   ` --loan-topic berka_loans --order-topic berka_orders --trans-topic berka_trans \`
   ` --interval-seconds 10 --batch-size 10`
 
-## Dimension ETL Jobs (Bronze → Silver → Gold)
-
-All dimension ETL jobs live under `scripts/etl` and use Spark SQL only.
-
-Bronze → Silver (Parquet, Snappy):
-- District: `scripts/etl/dim_district_bronze_to_silver.py`
-- Client:   `scripts/etl/dim_client_bronze_to_silver.py`
-- Account:  `scripts/etl/dim_account_bronze_to_silver.py`
-- Disp:     `scripts/etl/dim_disp_bronze_to_silver.py`
-- Card:     `scripts/etl/dim_card_bronze_to_silver.py`
-
-Silver → Gold (Iceberg, SCD2, Parquet, Snappy):
-- District: `scripts/etl/dim_district_silver_to_gold.py`
-- Client:   `scripts/etl/dim_client_silver_to_gold.py`
-- Account:  `scripts/etl/dim_account_silver_to_gold.py`
-- Disp:     `scripts/etl/dim_disp_silver_to_gold.py`
-- Card:     `scripts/etl/dim_card_silver_to_gold.py`
-
-Examples:
-- Bronze → Silver:  
-  `spark-submit scripts/etl/dim_client_bronze_to_silver.py \`
-  ` --bronze-db bronze --silver-db silver \`
-  ` --bronze-table client_bronze --silver-table client_silver`
-
-- Silver → Gold (Iceberg SCD2):  
-  `spark-submit scripts/etl/dim_client_silver_to_gold.py \`
-  ` --silver-db silver --gold-db gold \`
-  ` --silver-table client_silver --gold-table dim_client`
-
-Run the bronze→silver jobs after NiFi has landed raw CSVs into the bronze tables; then run the silver→gold jobs to build the curated Iceberg dimensions.
-
-### Dimension Load Order and PK/FK Checks
-
-To satisfy primary/foreign key relationships and the built‑in data quality checks:
-
-1. **Bronze → Silver (dimensions)**  
-   1. `dim_district_bronze_to_silver.py` – establishes `silver.district_silver` (district PKs).  
-   2. `dim_client_bronze_to_silver.py` – loads `silver.client_silver` and only keeps rows whose `district_id` exists in `silver.district_silver` (FK check); invalid/missing districts are written to `silver.dq_client`.  
-   3. `dim_account_bronze_to_silver.py` – loads `silver.account_silver` and enforces `district_id` FK to `silver.district_silver`; failures go to `silver.dq_account`.  
-   4. `dim_disp_bronze_to_silver.py` – cleans dispositions after client/account are present in silver; additional DQ for malformed IDs goes to `silver.dq_disp`.  
-   5. `dim_card_bronze_to_silver.py` – cleans card data; DQ issues go to `silver.dq_card`.
-
-2. **Silver → Gold (dimensions, Iceberg SCD2)**  
-   1. `dim_district_silver_to_gold.py` – builds `gold.dim_district`.  
-   2. `dim_client_silver_to_gold.py` – builds `gold.dim_client` (FK to `gold.dim_district`).  
-   3. `dim_account_silver_to_gold.py` – builds `gold.dim_account` (FK to `gold.dim_district`).  
-   4. `dim_disp_silver_to_gold.py` – builds `gold.dim_disp` and must run after `dim_client` and `dim_account` so that relationships between clients and accounts are valid.  
-   5. `dim_card_silver_to_gold.py` – builds `gold.dim_card` after `dim_disp`.
-
-## Fact Streaming Jobs (Kafka → Silver → Gold)
+### 5.2 Fact Streaming Jobs (Loan / Order / Trans)
 
 Three Spark Structured Streaming jobs consume Kafka topics and build fact tables:
 
@@ -391,15 +449,55 @@ Example (loan fact):
   ` --checkpoint-location /tmp/berka_fact_loan_chk \`
   ` --trigger-seconds 30`
 
-Recommended order:
+### 5.3 Airflow‑Style Fact DAG
+
+```mermaid
+flowchart TD
+    KAFKA_LOAN["Kafka: berka_loans"]
+    KAFKA_ORDER["Kafka: berka_orders"]
+    KAFKA_TRANS["Kafka: berka_trans"]
+
+    DIM_ACCOUNT_G["gold.dim_account"]
+
+    LOAN_STREAM["fact_loan_streaming.py"]
+    ORDER_STREAM["fact_order_streaming.py"]
+    TRANS_STREAM["fact_trans_streaming.py"]
+
+    F_LOAN_SILVER["silver.fact_loan_silver"]
+    F_ORDER_SILVER["silver.fact_order_silver"]
+    F_TRANS_SILVER["silver.fact_trans_silver"]
+
+    F_LOAN_GOLD["gold.fact_loan (Iceberg)"]
+    F_ORDER_GOLD["gold.fact_order (Iceberg)"]
+    F_TRANS_GOLD["gold.fact_trans (Iceberg)"]
+
+    %% Loan fact path
+    KAFKA_LOAN --> LOAN_STREAM
+    DIM_ACCOUNT_G --> LOAN_STREAM
+    LOAN_STREAM --> F_LOAN_SILVER --> F_LOAN_GOLD
+
+    %% Order fact path
+    KAFKA_ORDER --> ORDER_STREAM
+    DIM_ACCOUNT_G --> ORDER_STREAM
+    ORDER_STREAM --> F_ORDER_SILVER --> F_ORDER_GOLD
+
+    %% Transaction fact path
+    KAFKA_TRANS --> TRANS_STREAM
+    DIM_ACCOUNT_G --> TRANS_STREAM
+    TRANS_STREAM --> F_TRANS_SILVER --> F_TRANS_GOLD
+```
+
+Recommended runtime order:
 1. Run NiFi to populate bronze tables from `./data`.  
 2. Run dimension bronze→silver and silver→gold jobs to build Iceberg dimensions.  
 3. Start the Kafka data generator for loans/orders/trans.  
 4. Start the three fact streaming jobs to continuously populate silver and gold fact tables.
 
-## Customer 360 (HBase)
+---
 
-To demonstrate a real-time Customer 360 view, a dedicated streaming job consumes live loan, order, and transaction events, enriches them with Iceberg dimensions, and writes one row per customer into HBase via REST:
+## 6. Customer 360 (HBase)
+
+To demonstrate a real-time Customer 360 view, a dedicated streaming job consumes live loan, order, and transaction events, enriches them with Iceberg dimensions, and writes one row per customer into HBase via REST.
 
 - Script: `scripts/etl/customer_360_hbase_streaming.py`  
   - Reads from `--loan-topic`, `--order-topic`, and `--trans-topic`.  
@@ -415,3 +513,4 @@ Example:
   ` --hbase-rest-url http://hbase-rest-host:8080 \`
   ` --hbase-table customer360 \`
   ` --trigger-seconds 30`
+
