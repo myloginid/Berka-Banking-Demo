@@ -46,6 +46,49 @@ def main() -> None:
 
     bronze_table_full = f"{args.bronze_db}.{args.bronze_table}"
     silver_table_full = f"{args.silver_db}.{args.silver_table}"
+    dq_table_full = f"{args.silver_db}.dq_card"
+
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {dq_table_full} (
+          card_id   STRING,
+          disp_id   STRING,
+          type      STRING,
+          issued    STRING,
+          dq_date   DATE,
+          dq_reason STRING
+        )
+        USING parquet
+        TBLPROPERTIES ('parquet.compression' = 'snappy')
+        """
+    )
+
+    dq_insert_sql = f"""
+    INSERT INTO {dq_table_full}
+    (
+      card_id,
+      disp_id,
+      type,
+      issued,
+      dq_date,
+      dq_reason
+    )
+    SELECT
+      card_id,
+      disp_id,
+      type,
+      issued,
+      current_date AS dq_date,
+      'Invalid card/disp identifiers, type, or issued format' AS dq_reason
+    FROM {bronze_table_full}
+    WHERE NOT (
+      card_id RLIKE '^[0-9]+$' AND
+      disp_id RLIKE '^[0-9]+$' AND
+      type IS NOT NULL AND type <> '' AND
+      issued RLIKE '^[0-9]{6} '
+    )
+    """
+    spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
     CREATE OR REPLACE TABLE {silver_table_full}
@@ -57,6 +100,11 @@ def main() -> None:
       type                   AS card_type,
       TO_TIMESTAMP(issued, 'yyMMdd HH:mm:ss') AS issued_at
     FROM {bronze_table_full}
+    WHERE card_id RLIKE '^[0-9]+$'
+      AND disp_id RLIKE '^[0-9]+$'
+      AND type IS NOT NULL
+      AND type <> ''
+      AND issued RLIKE '^[0-9]{6} '
     """
 
     spark.sql(create_silver_sql)

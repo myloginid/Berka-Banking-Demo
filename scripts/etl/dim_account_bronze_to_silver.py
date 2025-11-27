@@ -49,6 +49,49 @@ def main() -> None:
 
     bronze_table_full = f"{args.bronze_db}.{args.bronze_table}"
     silver_table_full = f"{args.silver_db}.{args.silver_table}"
+    dq_table_full = f"{args.silver_db}.dq_account"
+
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {dq_table_full} (
+          account_id STRING,
+          district_id STRING,
+          frequency  STRING,
+          date       STRING,
+          dq_date    DATE,
+          dq_reason  STRING
+        )
+        USING parquet
+        TBLPROPERTIES ('parquet.compression' = 'snappy')
+        """
+    )
+
+    dq_insert_sql = f"""
+    INSERT INTO {dq_table_full}
+    (
+      account_id,
+      district_id,
+      frequency,
+      date,
+      dq_date,
+      dq_reason
+    )
+    SELECT
+      account_id,
+      district_id,
+      frequency,
+      date,
+      current_date AS dq_date,
+      'Invalid account/district identifiers, frequency, or date format' AS dq_reason
+    FROM {bronze_table_full}
+    WHERE NOT (
+      account_id  RLIKE '^[0-9]+$' AND
+      district_id RLIKE '^[0-9]+$' AND
+      frequency   IS NOT NULL AND frequency <> '' AND
+      date        RLIKE '^[0-9]{6}$'
+    )
+    """
+    spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
     CREATE OR REPLACE TABLE {silver_table_full}
@@ -60,6 +103,11 @@ def main() -> None:
       frequency                 AS frequency,
       TO_DATE(date, 'yyMMdd')   AS open_date
     FROM {bronze_table_full}
+    WHERE account_id  RLIKE '^[0-9]+$'
+      AND district_id RLIKE '^[0-9]+$'
+      AND frequency   IS NOT NULL
+      AND frequency   <> ''
+      AND date        RLIKE '^[0-9]{6}$'
     """
 
     spark.sql(create_silver_sql)

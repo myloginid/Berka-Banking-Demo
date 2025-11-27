@@ -56,6 +56,45 @@ def main() -> None:
 
     bronze_table_full = f"{args.bronze_db}.{args.bronze_table}"
     silver_table_full = f"{args.silver_db}.{args.silver_table}"
+    dq_table_full = f"{args.silver_db}.dq_client"
+
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {dq_table_full} (
+          client_id    STRING,
+          birth_number STRING,
+          district_id  STRING,
+          dq_date      DATE,
+          dq_reason    STRING
+        )
+        USING parquet
+        TBLPROPERTIES ('parquet.compression' = 'snappy')
+        """
+    )
+
+    dq_insert_sql = f"""
+    INSERT INTO {dq_table_full}
+    (
+      client_id,
+      birth_number,
+      district_id,
+      dq_date,
+      dq_reason
+    )
+    SELECT
+      client_id,
+      birth_number,
+      district_id,
+      current_date    AS dq_date,
+      'Invalid client_id/district_id format or missing birth_number' AS dq_reason
+    FROM {bronze_table_full}
+    WHERE NOT (
+      client_id  RLIKE '^[0-9]+$' AND
+      district_id RLIKE '^[0-9]+$' AND
+      birth_number IS NOT NULL AND birth_number <> ''
+    )
+    """
+    spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
     CREATE OR REPLACE TABLE {silver_table_full}
@@ -66,6 +105,10 @@ def main() -> None:
       birth_number             AS birth_number,
       CAST(district_id AS INT) AS district_id
     FROM {bronze_table_full}
+    WHERE client_id  RLIKE '^[0-9]+$'
+      AND district_id RLIKE '^[0-9]+$'
+      AND birth_number IS NOT NULL
+      AND birth_number <> ''
     """
 
     spark.sql(create_silver_sql)

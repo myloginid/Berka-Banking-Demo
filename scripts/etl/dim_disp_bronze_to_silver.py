@@ -46,6 +46,49 @@ def main() -> None:
 
     bronze_table_full = f"{args.bronze_db}.{args.bronze_table}"
     silver_table_full = f"{args.silver_db}.{args.silver_table}"
+    dq_table_full = f"{args.silver_db}.dq_disp"
+
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {dq_table_full} (
+          disp_id    STRING,
+          client_id  STRING,
+          account_id STRING,
+          type       STRING,
+          dq_date    DATE,
+          dq_reason  STRING
+        )
+        USING parquet
+        TBLPROPERTIES ('parquet.compression' = 'snappy')
+        """
+    )
+
+    dq_insert_sql = f"""
+    INSERT INTO {dq_table_full}
+    (
+      disp_id,
+      client_id,
+      account_id,
+      type,
+      dq_date,
+      dq_reason
+    )
+    SELECT
+      disp_id,
+      client_id,
+      account_id,
+      type,
+      current_date AS dq_date,
+      'Invalid disposition identifiers or type' AS dq_reason
+    FROM {bronze_table_full}
+    WHERE NOT (
+      disp_id   RLIKE '^[0-9]+$' AND
+      client_id RLIKE '^[0-9]+$' AND
+      account_id RLIKE '^[0-9]+$' AND
+      type IN ('OWNER', 'DISPONENT')
+    )
+    """
+    spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
     CREATE OR REPLACE TABLE {silver_table_full}
@@ -57,6 +100,10 @@ def main() -> None:
       CAST(account_id AS INT) AS account_id,
       type                    AS disp_type
     FROM {bronze_table_full}
+    WHERE disp_id   RLIKE '^[0-9]+$'
+      AND client_id RLIKE '^[0-9]+$'
+      AND account_id RLIKE '^[0-9]+$'
+      AND type IN ('OWNER', 'DISPONENT')
     """
 
     spark.sql(create_silver_sql)

@@ -56,6 +56,54 @@ def main() -> None:
 
     bronze_table_full = f"{args.bronze_db}.{args.bronze_table}"
     silver_table_full = f"{args.silver_db}.{args.silver_table}"
+    dq_table_full = f"{args.silver_db}.dq_district"
+
+    spark.sql(
+        f"""
+        CREATE TABLE IF NOT EXISTS {dq_table_full} (
+          A1       STRING,
+          A2       STRING,
+          A3       STRING,
+          A4       STRING,
+          A5       STRING,
+          A6       STRING,
+          A7       STRING,
+          A8       STRING,
+          A9       STRING,
+          A10      STRING,
+          A11      STRING,
+          A12      STRING,
+          A13      STRING,
+          A14      STRING,
+          A15      STRING,
+          A16      STRING,
+          dq_date  DATE,
+          dq_reason STRING
+        )
+        USING parquet
+        TBLPROPERTIES ('parquet.compression' = 'snappy')
+        """
+    )
+
+    dq_insert_sql = f"""
+    INSERT INTO {dq_table_full}
+    (
+      A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16,
+      dq_date,
+      dq_reason
+    )
+    SELECT
+      A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16,
+      current_date AS dq_date,
+      'Invalid district id or missing name/region' AS dq_reason
+    FROM {bronze_table_full}
+    WHERE NOT (
+      A1 RLIKE '^[0-9]+$' AND
+      A2 IS NOT NULL AND A2 <> '' AND
+      A3 IS NOT NULL AND A3 <> ''
+    )
+    """
+    spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
     CREATE OR REPLACE TABLE {silver_table_full}
@@ -79,6 +127,9 @@ def main() -> None:
       CAST(A15 AS INT)   AS A15,
       CAST(A16 AS INT)   AS A16
     FROM {bronze_table_full}
+    WHERE A1 RLIKE '^[0-9]+$'
+      AND A2 IS NOT NULL AND A2 <> ''
+      AND A3 IS NOT NULL AND A3 <> ''
     """
 
     spark.sql(create_silver_sql)
