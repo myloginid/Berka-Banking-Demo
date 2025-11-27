@@ -555,7 +555,7 @@ A simple “poor man’s” ML pipeline uses CML notebooks/scripts, PyTorch, Tri
 
 - Batch scoring: `cml/batch_score_loans.py`  
   - Reads features from `gold.fact_loan` via Trino.  
-  - Applies a saved model and writes scored results (predicted status and probabilities) to `cml/output/loan_scores.csv`.
+  - Applies a saved model and writes scored results (predicted status and probabilities) back into `gold.loan_default_scores` for run‑wise accuracy tracking.
 
 - Real‑time scoring service: `cml/realtime_scoring_service.py`  
   - Loads a trained model at startup.  
@@ -575,7 +575,7 @@ flowchart TD
 
     %% Batch scoring
     BATCH_SCORE["cml/batch_score_loans.py"]
-    BATCH_OUTPUT["cml/output/loan_scores.csv"]
+    BATCH_OUTPUT["gold.loan_default_scores"]
 
     %% Real-time scoring
     RT_SERVICE["cml/realtime_scoring_service.py (/score)"]
@@ -592,4 +592,3 @@ flowchart TD
     MODEL_STORE --> RT_SERVICE
     RT_SERVICE --> RT_CLIENTS
 ```
-

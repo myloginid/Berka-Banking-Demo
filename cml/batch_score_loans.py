@@ -5,14 +5,15 @@ Batch scoring script for the Berka loan default model.
 This script:
   - Loads a trained PyTorch model saved by `train_loan_default_pytorch.py`.
   - Reads loan features directly from the gold Iceberg table `fact_loan` via Trino.
-  - Writes a simple CSV with predicted class and probabilities.
+  - Writes run-wise predictions back into a gold table (`loan_default_scores`)
+    so they can be compared to actuals over time.
 
 Usage:
   python3 cml/batch_score_loans.py \
     --model-path cml/models/loan_default_model_run_0.pt \
     --trino-host trino-host --trino-port 8080 --trino-user cml \
     --trino-catalog iceberg --trino-schema gold \
-    --output-path cml/output/loan_scores.csv
+    --run-id "2025-01-01_batch_01"
 """
 
 import argparse
@@ -24,6 +25,7 @@ import numpy as np
 import pandas as pd
 import torch
 import trino
+from datetime import datetime
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,9 +64,9 @@ def parse_args() -> argparse.Namespace:
         help="Trino schema for gold tables. Default: gold",
     )
     parser.add_argument(
-        "--output-path",
-        default="cml/output/loan_scores.csv",
-        help="Path to write scored CSV. Default: cml/output/loan_scores.csv",
+        "--run-id",
+        default=None,
+        help="Identifier for this scoring run (e.g., date or batch ID). Default: auto-generated timestamp.",
     )
     parser.add_argument(
         "--limit",
@@ -107,7 +109,6 @@ def load_model(model_path: str) -> torch.nn.Module:
 def main() -> None:
     args = parse_args()
 
-    os.makedirs(Path(args.output_path).parent, exist_ok=True)
     conn = trino.dbapi.connect(
         host=args.trino_host,
         port=args.trino_port,
@@ -121,11 +122,13 @@ def main() -> None:
       loan_id,
       amount,
       duration,
-      payments
+      payments,
+      status
     FROM fact_loan
     WHERE amount IS NOT NULL
       AND duration IS NOT NULL
       AND payments IS NOT NULL
+      AND status IS NOT NULL
     LIMIT {args.limit}
     """
     df = pd.read_sql(sql, conn)
@@ -152,15 +155,57 @@ def main() -> None:
     idx_to_status = {int(k): v for k, v in idx_to_status.items()}
     pred_labels = [idx_to_status[int(i)] for i in preds]
 
-    out_df = df.copy()
-    out_df["pred_status"] = pred_labels
+    # Prepare run metadata.
+    run_id = args.run_id or datetime.utcnow().isoformat(timespec="seconds")
+    score_timestamp = datetime.utcnow().isoformat(timespec="seconds")
 
-    # Add probability columns.
-    for class_idx, class_label in idx_to_status.items():
-        out_df[f"prob_{class_label}"] = probs[:, class_idx]
+    # Build INSERT statements to write into gold.loan_default_scores.
+    # Table schema:
+    #   loan_id BIGINT,
+    #   score_timestamp TIMESTAMP,
+    #   run_id VARCHAR,
+    #   actual_status VARCHAR,
+    #   pred_status VARCHAR,
+    #   probabilities_json VARCHAR
 
-    out_df.to_csv(args.output_path, index=False)
-    print(f"Wrote batch scores to {args.output_path}")
+    def esc(val: str) -> str:
+        return val.replace("'", "''")
+
+    cur = conn.cursor()
+    create_sql = """
+    CREATE TABLE IF NOT EXISTS loan_default_scores (
+      loan_id BIGINT,
+      score_timestamp TIMESTAMP,
+      run_id VARCHAR,
+      actual_status VARCHAR,
+      pred_status VARCHAR,
+      probabilities_json VARCHAR
+    )
+    """
+    cur.execute(create_sql)
+
+    values = []
+    for i, row in df.iterrows():
+        loan_id = int(row["loan_id"])
+        actual_status = str(row["status"])
+        pred_status = pred_labels[i]
+        prob_dict = {idx_to_status[j]: float(probs[i, j]) for j in range(num_classes)}
+        prob_json = esc(pd.io.json.dumps(prob_dict)) if hasattr(pd.io, "json") else esc(str(prob_dict))
+        values.append(
+            f"({loan_id}, TIMESTAMP '{score_timestamp}', '{esc(run_id)}', "
+            f"'{esc(actual_status)}', '{esc(pred_status)}', '{prob_json}')"
+        )
+
+    if values:
+        insert_sql = (
+            "INSERT INTO loan_default_scores "
+            "(loan_id, score_timestamp, run_id, actual_status, pred_status, probabilities_json) VALUES "
+            + ",\n".join(values)
+        )
+        cur.execute(insert_sql)
+        print(f"Wrote {len(values)} prediction rows to gold.loan_default_scores (run_id={run_id}).")
+    else:
+        print("No rows to score; nothing written.")
 
 
 if __name__ == "__main__":
