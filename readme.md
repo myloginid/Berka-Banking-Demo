@@ -514,3 +514,82 @@ Example:
   ` --hbase-table customer360 \`
   ` --trigger-seconds 30`
 
+### 6.1 Customer 360 Flow (Mermaid)
+
+```mermaid
+flowchart TD
+    %% Inputs
+    KAFKA_LOAN["Kafka: berka_loans"]
+    KAFKA_ORDER["Kafka: berka_orders"]
+    KAFKA_TRANS["Kafka: berka_trans"]
+
+    DIM_CLIENT_G["gold.dim_client"]
+    DIM_ACCOUNT_G["gold.dim_account"]
+
+    %% Streaming job
+    C360_STREAM["customer_360_hbase_streaming.py"]
+
+    %% Target
+    HBASE_C360["HBase: customer360 table"]
+
+    %% Edges
+    KAFKA_LOAN --> C360_STREAM
+    KAFKA_ORDER --> C360_STREAM
+    KAFKA_TRANS --> C360_STREAM
+
+    DIM_CLIENT_G --> C360_STREAM
+    DIM_ACCOUNT_G --> C360_STREAM
+
+    C360_STREAM --> HBASE_C360
+```
+
+---
+
+## 7. Machine Learning Pipeline (CML + MLflow)
+
+A simple “poor man’s” ML pipeline uses CML notebooks/scripts, PyTorch, Trino, and MLflow to train and serve a loan default classifier.
+
+- Training script: `cml/train_loan_default_pytorch.py`  
+  - Pulls features directly from `gold.fact_loan` via Trino (`amount`, `duration`, `payments`, `status`).  
+  - Trains a small feed‑forward network in PyTorch and logs runs to MLflow (including model artifacts).
+
+- Batch scoring: `cml/batch_score_loans.py`  
+  - Reads features from `gold.fact_loan` via Trino.  
+  - Applies a saved model and writes scored results (predicted status and probabilities) to `cml/output/loan_scores.csv`.
+
+- Real‑time scoring service: `cml/realtime_scoring_service.py`  
+  - Loads a trained model at startup.  
+  - Exposes `/score` for JSON payloads (`amount`, `duration`, `payments`) and returns predictions in JSON.
+
+### 7.1 ML Flowchart (Mermaid)
+
+```mermaid
+flowchart TD
+    %% Data source
+    TRINO_FACT_LOAN["Trino → gold.fact_loan"]
+
+    %% Training
+    TRAIN_SCRIPT["cml/train_loan_default_pytorch.py"]
+    MLFLOW_EXP["MLflow experiment: berka_loan_default"]
+    MODEL_STORE["Model artifacts (cml/models, MLflow)"]
+
+    %% Batch scoring
+    BATCH_SCORE["cml/batch_score_loans.py"]
+    BATCH_OUTPUT["cml/output/loan_scores.csv"]
+
+    %% Real-time scoring
+    RT_SERVICE["cml/realtime_scoring_service.py (/score)"]
+    RT_CLIENTS["Apps / APIs calling /score"]
+
+    TRINO_FACT_LOAN --> TRAIN_SCRIPT
+    TRAIN_SCRIPT --> MLFLOW_EXP
+    TRAIN_SCRIPT --> MODEL_STORE
+
+    TRINO_FACT_LOAN --> BATCH_SCORE
+    MODEL_STORE --> BATCH_SCORE
+    BATCH_SCORE --> BATCH_OUTPUT
+
+    MODEL_STORE --> RT_SERVICE
+    RT_SERVICE --> RT_CLIENTS
+```
+
