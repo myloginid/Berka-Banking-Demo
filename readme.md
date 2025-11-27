@@ -4,11 +4,30 @@ This project demonstrates an end‑to‑end banking data pipeline on CDP Public 
 
 ---
 
-## 1. Source Dataset (`./data`)
+## 1. Repository Layout
+
+```text
+.
+├── POC Steps.md                # High-level POC narrative and stages
+├── agents.md                   # Project instructions / coding conventions
+├── data/                       # Berka CSVs (source dataset)
+├── readme.md                   # This document
+├── scripts/
+│   ├── etl/                    # Spark ETL jobs (dimensions, facts, Customer360)
+│   ├── bi/                     # Trino BI queries (simple/medium/complex)
+│   ├── kafka_data_generator/   # Berka Kafka streaming data generator
+│   └── init/                   # Bootstrap scripts (DBs, schemas, Kafka, HBase, ADLS)
+├── cml/                        # ML pipeline scripts (training, batch + real-time scoring)
+└── (bronze/silver/gold DBs)    # Created in the metastore by ETL jobs
+```
+
+---
+
+## 2. Source Dataset (`./data`)
 
 The Berka dataset is a collection of Czech bank data: customers, accounts, transactions, loans, cards, and districts.
 
-### 1.1 Files and Schemas
+### 2.1 Files and Schemas
 
 - `account.csv`  
   - **Purpose:** Bank accounts held by clients.  
@@ -82,14 +101,14 @@ The Berka dataset is a collection of Czech bank data: customers, accounts, trans
 
 These structures form the core relational model for the POC: clients live in districts, hold accounts, are linked via dispositions, can have cards and loans, and generate orders and transactions that drive downstream analytics, BI, and ML use cases in CDP.
 
-### 1.2 Date Conventions
+### 2.2 Date Conventions
 
 - Historic dates in the original Berka CSVs have been re-based to the year 2025 so that the dataset looks “current” for the POC (for example, `930101` → `250101`, corresponding to 2025‑01‑01).  
 - Date fields remain encoded as `YYMMDD` (or `YYMMDD hh:mm:ss` for card issue timestamps), preserving original month/day patterns while shifting the calendar year.
 
 ---
 
-## 2. Core Logical ER Model
+## 3. Core Logical ER Model
 
 At a logical level:
 - `district` defines geographic areas for both `client` and `account`.  
@@ -172,14 +191,14 @@ erDiagram
 
 ---
 
-## 3. Lakehouse Architecture (Bronze / Silver / Gold)
+## 4. Lakehouse Architecture (Bronze / Silver / Gold)
 
 The same entities are modeled across:
 - **Bronze** – raw/staged (NiFi‑landed CSVs and Kafka streams).  
 - **Silver** – cleaned and typed Parquet tables (with data quality capture).  
 - **Gold** – curated Iceberg tables (dimensions with SCD2, facts optimized for BI).
 
-### 3.1 Lakehouse Layers ER
+### 4.1 Lakehouse Layers ER
 
 ```mermaid
 erDiagram
@@ -319,11 +338,11 @@ erDiagram
 
 ---
 
-## 4. Dimension Pipelines
+## 5. Dimension Pipelines
 
 All dimension ETL jobs live under `scripts/etl` and use Spark SQL only.
 
-### 4.1 Bronze → Silver (Parquet + DQ)
+### 5.1 Bronze → Silver (Parquet + DQ)
 
 Bronze→Silver jobs clean and type data into Parquet and, when data quality (DQ) rules fail, write offending rows into daily DQ tables.
 
@@ -347,7 +366,7 @@ Example:
   ` --bronze-db bronze --silver-db silver \`
   ` --bronze-table client_bronze --silver-table client_silver`
 
-### 4.2 Silver → Gold (Iceberg SCD2)
+### 5.2 Silver → Gold (Iceberg SCD2)
 
 Silver→Gold jobs maintain SCD Type 2 Iceberg dimensions with `effective_from`, `effective_to`, `is_current`, and `scd_version`.
 
@@ -362,7 +381,7 @@ Example:
   ` --silver-db silver --gold-db gold \`
   ` --silver-table client_silver --gold-table dim_client`
 
-### 4.3 Dimension Load Order and PK/FK Checks
+### 5.3 Dimension Load Order and PK/FK Checks
 
 To satisfy primary/foreign key relationships and the built‑in DQ checks:
 
@@ -380,7 +399,7 @@ To satisfy primary/foreign key relationships and the built‑in DQ checks:
    4. `dim_disp_silver_to_gold.py` – builds `gold.dim_disp` and must run after `dim_client` and `dim_account`.  
    5. `dim_card_silver_to_gold.py` – builds `gold.dim_card` after `dim_disp`.
 
-### 4.4 Airflow‑Style Dimension DAG
+### 5.4 Airflow‑Style Dimension DAG
 
 ```mermaid
 flowchart TD
@@ -406,9 +425,9 @@ flowchart TD
 
 ---
 
-## 5. Streaming Pipelines (Kafka → Silver → Gold)
+## 6. Streaming Pipelines (Kafka → Silver → Gold)
 
-### 5.1 Kafka Data Generator
+### 6.1 Kafka Data Generator
 
 The Berka streaming generator sends synthetic loan, order, and transaction events to Kafka topics.
 
@@ -420,7 +439,7 @@ Example:
   ` --loan-topic berka_loans --order-topic berka_orders --trans-topic berka_trans \`
   ` --interval-seconds 10 --batch-size 10`
 
-### 5.2 Fact Streaming Jobs (Loan / Order / Trans)
+### 6.2 Fact Streaming Jobs (Loan / Order / Trans)
 
 Three Spark Structured Streaming jobs consume Kafka topics and build fact tables:
 
@@ -449,7 +468,7 @@ Example (loan fact):
   ` --checkpoint-location /tmp/berka_fact_loan_chk \`
   ` --trigger-seconds 30`
 
-### 5.3 Airflow‑Style Fact DAG
+### 6.3 Airflow‑Style Fact DAG
 
 ```mermaid
 flowchart TD
@@ -495,7 +514,7 @@ Recommended runtime order:
 
 ---
 
-## 6. Customer 360 (HBase)
+## 7. Customer 360 (HBase)
 
 To demonstrate a real-time Customer 360 view, a dedicated streaming job consumes live loan, order, and transaction events, enriches them with Iceberg dimensions, and writes one row per customer into HBase via REST.
 
@@ -514,7 +533,7 @@ Example:
   ` --hbase-table customer360 \`
   ` --trigger-seconds 30`
 
-### 6.1 Customer 360 Flow (Mermaid)
+### 7.1 Customer 360 Flow (Mermaid)
 
 ```mermaid
 flowchart TD
@@ -547,7 +566,7 @@ flowchart TD
 
 ---
 
-## 7. Machine Learning Pipeline (CML + MLflow)
+## 8. Machine Learning Pipeline (CML + MLflow)
 
 A simple “poor man’s” ML pipeline uses CML notebooks/scripts, PyTorch, Trino, and MLflow to train and serve a loan default classifier.
 
@@ -563,7 +582,7 @@ A simple “poor man’s” ML pipeline uses CML notebooks/scripts, PyTorch, Tri
   - Loads a trained model at startup.  
   - Exposes `/score` for JSON payloads (`amount`, `duration`, `payments`) and returns predictions in JSON.
 
-### 7.1 ML Flowchart (Mermaid)
+### 8.1 ML Flowchart (Mermaid)
 
 ```mermaid
 flowchart TD
