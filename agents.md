@@ -1,0 +1,13 @@
+In this project we will use CDP Public Cloud Deployed in Azure to ingest the The Berka Dataset available in ./data folder and do everything that is described in ./POC Steps.md to show the end to end working to CDP Public Cloud.
+
+
+The Berka dataset is a collection of financial information from a Czech bank. The dataset deals with over 5,300 bank clients with approximately 1,000,000 transactions. Additionally, the bank represented in the dataset has extended close to 700 loans and issued nearly 900 credit cards, all of which are represented in the data."
+
+-rw-r--r--@  69406578 15 May  2023 trans.csv
+-rw-r--r--@    273800 15 May  2023 order.csv
+-rw-r--r--@     27037 15 May  2023 loan.csv
+-rw-r--r--@      6574 15 May  2023 district.csv
+-rw-r--r--@    129716 15 May  2023 disp.csv
+-rw-r--r--@     94820 15 May  2023 client.csv
+-rw-r--r--@     31588 15 May  2023 card.csv
+-rw-r--r--@    155356 15 May  2023 account.csv
