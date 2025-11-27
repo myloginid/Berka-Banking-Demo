@@ -238,3 +238,22 @@ Recommended order:
 2. Run dimension bronze→silver and silver→gold jobs to build Iceberg dimensions.  
 3. Start the Kafka data generator for loans/orders/trans.  
 4. Start the three fact streaming jobs to continuously populate silver and gold fact tables.
+
+## Customer 360 (HBase)
+
+To demonstrate a real-time Customer 360 view, a dedicated streaming job consumes live loan, order, and transaction events, enriches them with Iceberg dimensions, and writes one row per customer into HBase via REST:
+
+- Script: `scripts/etl/customer_360_hbase_streaming.py`  
+  - Reads from `--loan-topic`, `--order-topic`, and `--trans-topic`.  
+  - Joins against `gold.dim_client` and `gold.dim_account` (current SCD2 versions).  
+  - Produces a “latest activity” snapshot per `client_id` and upserts to HBase.
+
+Example:
+- `spark-submit scripts/etl/customer_360_hbase_streaming.py \`
+  ` --bootstrap-servers localhost:9092 \`
+  ` --loan-topic berka_loans --order-topic berka_orders --trans-topic berka_trans \`
+  ` --gold-db gold \`
+  ` --checkpoint-location /tmp/berka_customer360_chk \`
+  ` --hbase-rest-url http://hbase-rest-host:8080 \`
+  ` --hbase-table customer360 \`
+  ` --trigger-seconds 30`
