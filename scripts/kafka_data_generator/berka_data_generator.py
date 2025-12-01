@@ -24,6 +24,25 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import ssl
+
+
+DEFAULT_BOOTSTRAP_SERVERS = ",".join(
+    [
+        "kafka-demo-corebroker0.maybank1.xfaz-gdb4.cloudera.site:9093",
+        "kafka-demo-corebroker1.maybank1.xfaz-gdb4.cloudera.site:9093",
+        "kafka-demo-corebroker2.maybank1.xfaz-gdb4.cloudera.site:9093",
+    ]
+)
+# Default to the directory that contains this script so the nearby Berka CSVs are found without flags.
+DEFAULT_DATA_DIR = str(Path(__file__).resolve().parent)
+
+
+def non_negative_int(value: str) -> int:
+    ivalue = int(value)
+    if ivalue < 0:
+        raise argparse.ArgumentTypeError("Value must be >= 0")
+    return ivalue
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,8 +51,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bootstrap-servers",
-        default="localhost:9092",
-        help="Kafka bootstrap servers (host:port, comma separated). Default: localhost:9092",
+        default=DEFAULT_BOOTSTRAP_SERVERS,
+        help=(
+            "Kafka bootstrap servers (host:port, comma separated). "
+            f"Default: {DEFAULT_BOOTSTRAP_SERVERS}"
+        ),
     )
     parser.add_argument(
         "--loan-topic",
@@ -51,10 +73,54 @@ def parse_args() -> argparse.Namespace:
         help="Kafka topic name for transaction events. Default: berka_trans",
     )
     parser.add_argument(
+        "--security-protocol",
+        default="SASL_SSL",
+        choices=["PLAINTEXT", "SASL_PLAINTEXT", "SASL_SSL", "SSL"],
+        help=(
+            "Kafka security protocol. Use SASL_* when authenticating via Kerberos. "
+            "Default: SASL_SSL"
+        ),
+    )
+    parser.add_argument(
+        "--sasl-mechanism",
+        default="GSSAPI",
+        help="Kafka SASL mechanism. Kerberos uses GSSAPI. Default: GSSAPI",
+    )
+    parser.add_argument(
+        "--kerberos-service-name",
+        default="kafka",
+        help="Kerberos service principal name (the 'primary' part). Default: kafka",
+    )
+    parser.add_argument(
+        "--kerberos-domain-name",
+        default=None,
+        help="Optional Kerberos realm/domain portion if brokers require it (e.g., EXAMPLE.COM).",
+    )
+    parser.add_argument(
+        "--ssl-cafile",
+        default=None,
+        help="Path to CA certificate file for verifying broker certs when using SSL.",
+    )
+    parser.add_argument(
+        "--ssl-certfile",
+        default=None,
+        help="Optional client certificate file for mutual TLS.",
+    )
+    parser.add_argument(
+        "--ssl-keyfile",
+        default=None,
+        help="Private key file for the provided client certificate.",
+    )
+    parser.add_argument(
+        "--ssl-disable-hostname-check",
+        action="store_true",
+        help="Disable SSL hostname verification (not recommended).",
+    )
+    parser.add_argument(
         "--interval-seconds",
         type=int,
-        default=10,
-        help="Interval in seconds between batches of generated events. Default: 10",
+        default=30,
+        help="Interval in seconds between batches of generated events. Default: 30",
     )
     parser.add_argument(
         "--batch-size",
@@ -63,9 +129,18 @@ def parse_args() -> argparse.Namespace:
         help="Number of events of each type to generate per interval. Default: 10",
     )
     parser.add_argument(
+        "--max-iterations",
+        type=non_negative_int,
+        default=0,
+        help="Maximum number of batches to send before exiting (0 = run forever).",
+    )
+    parser.add_argument(
         "--data-dir",
-        default="data",
-        help="Directory containing Berka CSVs (account.csv, client.csv, disp.csv). Default: data",
+        default=DEFAULT_DATA_DIR,
+        help=(
+            "Directory containing Berka CSVs (account.csv, client.csv, disp.csv). "
+            f"Default: {DEFAULT_DATA_DIR}"
+        ),
     )
     return parser.parse_args()
 
@@ -375,12 +450,32 @@ def main() -> None:
     ref_data = load_reference_data(args.data_dir)
     KafkaProducer = try_import_kafka_producer()
 
-    producer = KafkaProducer(
-        bootstrap_servers=args.bootstrap_servers.split(","),
-        value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        key_serializer=lambda v: v.encode("utf-8") if v is not None else None,
-        linger_ms=10,
-    )
+    producer_config: Dict[str, Any] = {
+        "bootstrap_servers": args.bootstrap_servers.split(","),
+        "value_serializer": lambda v: json.dumps(v).encode("utf-8"),
+        "key_serializer": lambda v: v.encode("utf-8") if v is not None else None,
+        "linger_ms": 10,
+    }
+
+    if args.security_protocol:
+        producer_config["security_protocol"] = args.security_protocol
+
+    if args.security_protocol and args.security_protocol.upper().startswith("SASL"):
+        producer_config["sasl_mechanism"] = args.sasl_mechanism
+        producer_config["sasl_kerberos_service_name"] = args.kerberos_service_name
+        if args.kerberos_domain_name:
+            producer_config["sasl_kerberos_domain_name"] = args.kerberos_domain_name
+
+    if args.security_protocol and "SSL" in args.security_protocol.upper():
+        ssl_context = ssl.create_default_context(cafile=args.ssl_cafile)
+        if args.ssl_certfile:
+            ssl_context.load_cert_chain(certfile=args.ssl_certfile, keyfile=args.ssl_keyfile)
+        if args.ssl_disable_hostname_check:
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+        producer_config["ssl_context"] = ssl_context
+
+    producer = KafkaProducer(**producer_config)
 
     print(
         f"Starting Berka data generator:\n"
@@ -398,6 +493,7 @@ def main() -> None:
     next_order_id = 1
     next_trans_id = 1
     balances: Dict[int, float] = {}
+    iterations = 0
 
     try:
         while True:
@@ -439,6 +535,10 @@ def main() -> None:
                 f"{len(trans_events)} transactions.",
                 flush=True,
             )
+
+            iterations += 1
+            if args.max_iterations and iterations >= args.max_iterations:
+                break
 
             time.sleep(args.interval_seconds)
 
