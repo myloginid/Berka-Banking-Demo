@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS bronze.account_bronze (
   account_id  STRING,
   district_id STRING,
   frequency   STRING,
-  date        STRING
+  created_date STRING
 )
 STORED AS PARQUET;
 
