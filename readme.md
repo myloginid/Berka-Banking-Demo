@@ -353,7 +353,7 @@ Bronze→Silver jobs clean and type data into Parquet and, when data quality (DQ
   - DQ rows (invalid IDs, missing `birth_number`, unknown `district_id`) go to `silver.dq_client`.
 - Account: `scripts/etl/dim_account_bronze_to_silver.py`  
   - Outputs `silver.account_silver`; enforces `district_id` FK to `silver.district_silver`.  
-  - DQ rows (invalid IDs, bad `date`, unknown `district_id`) go to `silver.dq_account`.
+  - DQ rows (invalid IDs, bad `created_date`, unknown `district_id`) go to `silver.dq_account`.
 - Disp: `scripts/etl/dim_disp_bronze_to_silver.py`  
   - Outputs `silver.disp_silver`; cleans malformed IDs and types.  
   - DQ rows go to `silver.dq_disp`.

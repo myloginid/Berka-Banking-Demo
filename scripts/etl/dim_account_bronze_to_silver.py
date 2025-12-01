@@ -57,7 +57,7 @@ def main() -> None:
           account_id STRING,
           district_id STRING,
           frequency  STRING,
-      date       STRING,
+          created_date       STRING,
           dq_date    DATE,
           dq_reason  STRING
         )
@@ -72,7 +72,7 @@ def main() -> None:
       account_id,
       district_id,
       frequency,
-      date,
+      created_date,
       dq_date,
       dq_reason
     )
@@ -80,15 +80,15 @@ def main() -> None:
       account_id,
       district_id,
       frequency,
-      date,
+      created_date,
       current_date AS dq_date,
-      'Invalid account/district identifiers, frequency, date format, or unknown district_id' AS dq_reason
+      'Invalid account/district identifiers, frequency, created_date format, or unknown district_id' AS dq_reason
     FROM {bronze_table_full} b
     WHERE NOT (
       b.account_id  RLIKE '^[0-9]+$' AND
       b.district_id RLIKE '^[0-9]+$' AND
       b.frequency   IS NOT NULL AND b.frequency <> '' AND
-      b.date        RLIKE '^[0-9]{6}$' AND
+      b.created_date        RLIKE '^[0-9]{6}$' AND
       EXISTS (
         SELECT 1
         FROM {args.silver_db}.district_silver d
@@ -106,13 +106,13 @@ def main() -> None:
       CAST(b.account_id AS INT)   AS account_id,
       CAST(b.district_id AS INT)  AS district_id,
       b.frequency                 AS frequency,
-      TO_DATE(b.date, 'yyMMdd')   AS open_date
+      TO_DATE(b.created_date, 'yyMMdd')   AS open_date
     FROM {bronze_table_full} b
     WHERE b.account_id  RLIKE '^[0-9]+$'
       AND b.district_id RLIKE '^[0-9]+$'
       AND b.frequency   IS NOT NULL
       AND b.frequency   <> ''
-      AND b.date        RLIKE '^[0-9]{6}$'
+      AND b.created_date        RLIKE '^[0-9]{6}$'
       AND EXISTS (
         SELECT 1
         FROM {args.silver_db}.district_silver d
