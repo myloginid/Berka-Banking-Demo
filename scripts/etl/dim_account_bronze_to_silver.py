@@ -50,6 +50,9 @@ def main() -> None:
     bronze_table_full = f"{args.bronze_db}.{args.bronze_table}"
     silver_table_full = f"{args.silver_db}.{args.silver_table}"
     dq_table_full = f"{args.silver_db}.dq_account"
+    # Avoid stale file listings when reading district_silver
+    spark.catalog.refreshTable(f"{args.silver_db}.district_silver")
+    spark.sql(f"REFRESH TABLE {args.silver_db}.district_silver")
 
     spark.sql(
         f"""
