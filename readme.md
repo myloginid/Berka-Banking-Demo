@@ -14,10 +14,18 @@ This project demonstrates an end‑to‑end banking data pipeline on CDP Public 
 ├── readme.md                   # This document
 ├── scripts/
 │   ├── etl/                    # Spark ETL jobs (dimensions, facts, Customer360)
-│   ├── bi/                     # Trino BI queries (simple/medium/complex)
+│   ├── init/                   # Bootstrap scripts (DBs, schemas, Kafka, HBase table)
 │   ├── kafka_data_generator/   # Berka Kafka streaming data generator
-│   └── init/                   # Bootstrap scripts (DBs, schemas, Kafka, HBase, ADLS)
-├── cml/                        # ML pipeline scripts (training, batch + real-time scoring)
+│   ├── bi/                     # Trino BI queries (simple/medium/complex)
+│   ├── cml/                    # ML / CML helpers (if any)
+│   └── airflow/                # Airflow-specific helpers (optional)
+├── tools/
+│   ├── cde                     # CDE CLI binary
+│   ├── .cde/                   # CDE CLI config (vcluster endpoint, etc.)
+│   ├── credentials             # CDP access key + private key (local only)
+│   ├── cde-pass.txt            # Local password file (local only)
+│   └── azure/                  # Azure ABFS config examples
+├── hbase/                      # COD / HBase client jars and config
 └── (bronze/silver/gold DBs)    # Created in the metastore by ETL jobs
 ```
 

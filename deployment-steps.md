@@ -4,26 +4,31 @@ This document captures the key steps to deploy and run the Berka demo in CDP Pub
 
 ## 1. CDE CLI layout & setup
 
-The repo expects the following layout:
+The repo now keeps CDE tooling and secrets under `tools/` so the project
+root stays clean:
 
-- `./cde` – CDE CLI binary (executable).
-- `./.cde/config.yaml` – virtual cluster endpoint and CDP control plane endpoint.
-- `./credentials` – CDP access key + private key (never commit to git).
-- `./cde-pass.txt` – local password file for the CDE user (never commit to git).
+- `tools/cde` – CDE CLI binary (executable).
+- `tools/.cde/config.yaml` – virtual cluster endpoint and CDP control plane endpoint.
+- `tools/credentials` – CDP access key + private key (never commit to git).
+- `tools/cde-pass.txt` – local password file for the CDE user (never commit to git).
 
 ### 1.1 Place the CLI binary
 
-1. Copy the `cde` CLI binary for your CDE virtual cluster into the project root (same directory as this file).
+1. Copy the `cde` CLI binary for your CDE virtual cluster into `tools/`.
 2. Make it executable:
    ```bash
-   chmod +x cde
+   cd /Users/manish/data/work/code/bankdemo
+   mkdir -p tools
+   mv /path/to/downloaded/cde tools/cde
+   chmod +x tools/cde
    ```
 
 ### 1.2 CDP credentials file
 
-Create the CDP credentials file in the project root (already present in this repo for convenience):
+Create the CDP credentials file under `tools/` (already present in this repo for convenience):
    ```bash
-   cat > credentials << 'EOF'
+   mkdir -p tools
+   cat > tools/credentials << 'EOF'
    [default]
    cdp_access_key_id = e08748cc-b28d-44a3-8146-206c57bb0967
    cdp_private_key   = rN5hRimXrukw2WWdzzeYq7XMjBRKYVHu5DrIK0lPMI4=
@@ -32,7 +37,7 @@ Create the CDP credentials file in the project root (already present in this rep
 
 ### 1.3 CDE endpoint config
 
-Ensure the CDE endpoint config exists at `.cde/config.yaml`:
+Ensure the CDE endpoint config exists at `tools/.cde/config.yaml`:
    ```yaml
    user: manishm
    vcluster-endpoint: https://l9j5mkt8.cde-fdsrx9qm.maybank1.xfaz-gdb4.cloudera.site/dex/api/v1
@@ -43,11 +48,11 @@ Ensure the CDE endpoint config exists at `.cde/config.yaml`:
 
 To avoid interactive password prompts in automation (scripts, CI, etc.), use a password file for the CDE user:
 
-1. Create a local password file in the project root:
+1. Create a local password file under `tools/`:
    ```bash
    cd /Users/manish/data/work/code/bankdemo
 
-   cat > cde-pass.txt << 'EOF'
+   cat > tools/cde-pass.txt << 'EOF'
    Cloudera@123
    EOF
 
@@ -62,8 +67,8 @@ From the project root, use this prefix for all CDE CLI commands:
 ```bash
 cd /Users/manish/data/work/code/bankdemo
 
-BASE_CDE="./cde \
-  --credentials-file credentials \
+BASE_CDE="tools/cde \
+  --credentials-file tools/credentials \
   --cdp-endpoint https://api.us-west-1.cdp.cloudera.com \
   --vcluster-endpoint https://l9j5mkt8.cde-fdsrx9qm.maybank1.xfaz-gdb4.cloudera.site/dex/api/v1"
 ```
@@ -100,7 +105,7 @@ This section summarizes the key commands used to manage resources and jobs for t
   ```bash
   $BASE_CDE resource upload \
     --name berka-code \
-    --local-path scripts/etl/dim_account_bronze_to_silver.py \
+  --local-path scripts/etl/dim_account_bronze_to_silver.py \
     --resource-path dim_account_bronze_to_silver.py
   ```
 
