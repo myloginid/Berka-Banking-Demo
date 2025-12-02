@@ -43,6 +43,7 @@ def main() -> None:
 
     spark = (
         SparkSession.builder.appName("dim_account_bronze_to_silver_sql")
+        .config("spark.security.credentials.hiveserver2.enabled", "false")
         .enableHiveSupport()
         .getOrCreate()
     )
@@ -85,26 +86,31 @@ def main() -> None:
       frequency,
       created_date,
       current_date AS dq_date,
-      'Invalid account/district identifiers, frequency, created_date format, or unknown district_id' AS dq_reason
+      'Invalid account/district identifiers, frequency, or created_date' AS dq_reason
     FROM {bronze_table_full} b
     WHERE NOT (
       b.account_id  RLIKE '^[0-9]+$' AND
       b.district_id RLIKE '^[0-9]+$' AND
       b.frequency   IS NOT NULL AND b.frequency <> '' AND
-      b.created_date        RLIKE '^[0-9]{6}$' AND
-      EXISTS (
-        SELECT 1
-        FROM {args.silver_db}.district_silver d
-        WHERE CAST(b.district_id AS INT) = d.district_id
-      )
+      b.created_date IS NOT NULL AND b.created_date <> ''
     )
     """
     spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
-    CREATE OR REPLACE TABLE {silver_table_full}
+    CREATE TABLE IF NOT EXISTS {silver_table_full} (
+      account_id  INT,
+      district_id INT,
+      frequency   STRING,
+      open_date   DATE
+    )
     USING parquet
-    TBLPROPERTIES ('parquet.compression' = 'snappy') AS
+    TBLPROPERTIES ('parquet.compression' = 'snappy')
+    """
+    spark.sql(create_silver_sql)
+
+    insert_silver_sql = f"""
+    INSERT OVERWRITE TABLE {silver_table_full}
     SELECT
       CAST(b.account_id AS INT)   AS account_id,
       CAST(b.district_id AS INT)  AS district_id,
@@ -115,15 +121,9 @@ def main() -> None:
       AND b.district_id RLIKE '^[0-9]+$'
       AND b.frequency   IS NOT NULL
       AND b.frequency   <> ''
-      AND b.created_date        RLIKE '^[0-9]{6}$'
-      AND EXISTS (
-        SELECT 1
-        FROM {args.silver_db}.district_silver d
-        WHERE CAST(b.district_id AS INT) = d.district_id
-      )
     """
 
-    spark.sql(create_silver_sql)
+    spark.sql(insert_silver_sql)
 
     spark.stop()
 

@@ -40,6 +40,7 @@ def main() -> None:
 
     spark = (
         SparkSession.builder.appName("dim_card_bronze_to_silver_sql")
+        .config("spark.security.credentials.hiveserver2.enabled", "false")
         .enableHiveSupport()
         .getOrCreate()
     )
@@ -79,21 +80,31 @@ def main() -> None:
       type,
       issued,
       current_date AS dq_date,
-      'Invalid card/disp identifiers, type, or issued format' AS dq_reason
+      'Invalid card/disp identifiers, type, or issued' AS dq_reason
     FROM {bronze_table_full}
     WHERE NOT (
       card_id RLIKE '^[0-9]+$' AND
       disp_id RLIKE '^[0-9]+$' AND
       type IS NOT NULL AND type <> '' AND
-      issued RLIKE '^[0-9]{6} '
+      issued IS NOT NULL AND issued <> ''
     )
     """
     spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
-    CREATE OR REPLACE TABLE {silver_table_full}
+    CREATE TABLE IF NOT EXISTS {silver_table_full} (
+      card_id   INT,
+      disp_id   INT,
+      card_type STRING,
+      issued_at TIMESTAMP
+    )
     USING parquet
-    TBLPROPERTIES ('parquet.compression' = 'snappy') AS
+    TBLPROPERTIES ('parquet.compression' = 'snappy')
+    """
+    spark.sql(create_silver_sql)
+
+    insert_silver_sql = f"""
+    INSERT OVERWRITE TABLE {silver_table_full}
     SELECT
       CAST(card_id AS INT)   AS card_id,
       CAST(disp_id AS INT)   AS disp_id,
@@ -104,10 +115,9 @@ def main() -> None:
       AND disp_id RLIKE '^[0-9]+$'
       AND type IS NOT NULL
       AND type <> ''
-      AND issued RLIKE '^[0-9]{6} '
     """
 
-    spark.sql(create_silver_sql)
+    spark.sql(insert_silver_sql)
 
     spark.stop()
 

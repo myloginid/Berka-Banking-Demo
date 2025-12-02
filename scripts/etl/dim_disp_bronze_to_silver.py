@@ -40,6 +40,7 @@ def main() -> None:
 
     spark = (
         SparkSession.builder.appName("dim_disp_bronze_to_silver_sql")
+        .config("spark.security.credentials.hiveserver2.enabled", "false")
         .enableHiveSupport()
         .getOrCreate()
     )
@@ -91,9 +92,19 @@ def main() -> None:
     spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
-    CREATE OR REPLACE TABLE {silver_table_full}
+    CREATE TABLE IF NOT EXISTS {silver_table_full} (
+      disp_id    INT,
+      client_id  INT,
+      account_id INT,
+      disp_type  STRING
+    )
     USING parquet
-    TBLPROPERTIES ('parquet.compression' = 'snappy') AS
+    TBLPROPERTIES ('parquet.compression' = 'snappy')
+    """
+    spark.sql(create_silver_sql)
+
+    insert_silver_sql = f"""
+    INSERT OVERWRITE TABLE {silver_table_full}
     SELECT
       CAST(disp_id AS INT)    AS disp_id,
       CAST(client_id AS INT)  AS client_id,
@@ -106,7 +117,7 @@ def main() -> None:
       AND type IN ('OWNER', 'DISPONENT')
     """
 
-    spark.sql(create_silver_sql)
+    spark.sql(insert_silver_sql)
 
     spark.stop()
 

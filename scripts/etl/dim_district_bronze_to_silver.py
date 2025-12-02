@@ -50,6 +50,7 @@ def main() -> None:
 
     spark = (
         SparkSession.builder.appName("dim_district_bronze_to_silver")
+        .config("spark.security.credentials.hiveserver2.enabled", "false")
         .enableHiveSupport()
         .getOrCreate()
     )
@@ -106,33 +107,55 @@ def main() -> None:
     spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
-    CREATE OR REPLACE TABLE {silver_table_full}
+    CREATE TABLE IF NOT EXISTS {silver_table_full} (
+      district_id   INT,
+      district_name STRING,
+      region        STRING,
+      A4            INT,
+      A5            INT,
+      A6            INT,
+      A7            INT,
+      A8            INT,
+      A9            INT,
+      A10           DOUBLE,
+      A11           INT,
+      A12           DOUBLE,
+      A13           DOUBLE,
+      A14           INT,
+      A15           INT,
+      A16           INT
+    )
     USING parquet
-    TBLPROPERTIES ('parquet.compression' = 'snappy') AS
+    TBLPROPERTIES ('parquet.compression' = 'snappy')
+    """
+    spark.sql(create_silver_sql)
+
+    insert_silver_sql = f"""
+    INSERT OVERWRITE TABLE {silver_table_full}
     SELECT
-      CAST(A1 AS INT)    AS district_id,
-      A2                 AS district_name,
-      A3                 AS region,
-      CAST(A4 AS INT)    AS A4,
-      CAST(A5 AS INT)    AS A5,
-      CAST(A6 AS INT)    AS A6,
-      CAST(A7 AS INT)    AS A7,
-      CAST(A8 AS INT)    AS A8,
-      CAST(A9 AS INT)    AS A9,
+      CAST(A1 AS INT)     AS district_id,
+      A2                  AS district_name,
+      A3                  AS region,
+      CAST(A4 AS INT)     AS A4,
+      CAST(A5 AS INT)     AS A5,
+      CAST(A6 AS INT)     AS A6,
+      CAST(A7 AS INT)     AS A7,
+      CAST(A8 AS INT)     AS A8,
+      CAST(A9 AS INT)     AS A9,
       CAST(A10 AS DOUBLE) AS A10,
-      CAST(A11 AS INT)   AS A11,
+      CAST(A11 AS INT)    AS A11,
       CAST(A12 AS DOUBLE) AS A12,
       CAST(A13 AS DOUBLE) AS A13,
-      CAST(A14 AS INT)   AS A14,
-      CAST(A15 AS INT)   AS A15,
-      CAST(A16 AS INT)   AS A16
+      CAST(A14 AS INT)    AS A14,
+      CAST(A15 AS INT)    AS A15,
+      CAST(A16 AS INT)    AS A16
     FROM {bronze_table_full}
     WHERE A1 RLIKE '^[0-9]+$'
       AND A2 IS NOT NULL AND A2 <> ''
       AND A3 IS NOT NULL AND A3 <> ''
     """
 
-    spark.sql(create_silver_sql)
+    spark.sql(insert_silver_sql)
 
     spark.stop()
 

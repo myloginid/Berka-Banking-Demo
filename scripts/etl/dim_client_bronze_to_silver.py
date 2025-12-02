@@ -50,6 +50,7 @@ def main() -> None:
 
     spark = (
         SparkSession.builder.appName("dim_client_bronze_to_silver_sql")
+        .config("spark.security.credentials.hiveserver2.enabled", "false")
         .enableHiveSupport()
         .getOrCreate()
     )
@@ -102,9 +103,18 @@ def main() -> None:
     spark.sql(dq_insert_sql)
 
     create_silver_sql = f"""
-    CREATE OR REPLACE TABLE {silver_table_full}
+    CREATE TABLE IF NOT EXISTS {silver_table_full} (
+      client_id    INT,
+      birth_number STRING,
+      district_id  INT
+    )
     USING parquet
-    TBLPROPERTIES ('parquet.compression' = 'snappy') AS
+    TBLPROPERTIES ('parquet.compression' = 'snappy')
+    """
+    spark.sql(create_silver_sql)
+
+    insert_silver_sql = f"""
+    INSERT OVERWRITE TABLE {silver_table_full}
     SELECT
       CAST(b.client_id AS INT)   AS client_id,
       b.birth_number             AS birth_number,
@@ -121,7 +131,7 @@ def main() -> None:
       )
     """
 
-    spark.sql(create_silver_sql)
+    spark.sql(insert_silver_sql)
 
     spark.stop()
 

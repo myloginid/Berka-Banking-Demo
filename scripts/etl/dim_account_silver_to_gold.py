@@ -40,6 +40,7 @@ def main() -> None:
 
     spark = (
         SparkSession.builder.appName("dim_account_silver_to_gold_scd2_sql")
+        .config("spark.security.credentials.hiveserver2.enabled", "false")
         .enableHiveSupport()
         .getOrCreate()
     )

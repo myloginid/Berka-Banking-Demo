@@ -29,8 +29,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--bootstrap-servers",
-        default="localhost:9092",
-        help="Kafka bootstrap servers (host:port, comma separated). Default: localhost:9092",
+        default=(
+            "kafka-demo-corebroker0.maybank1.xfaz-gdb4.cloudera.site:9093,"
+            "kafka-demo-corebroker1.maybank1.xfaz-gdb4.cloudera.site:9093,"
+            "kafka-demo-corebroker2.maybank1.xfaz-gdb4.cloudera.site:9093"
+        ),
+        help=(
+            "Kafka bootstrap servers (host:port, comma separated). "
+            "Default matches the Berka data generator cluster."
+        ),
     )
     parser.add_argument(
         "--loan-topic",
@@ -133,7 +140,7 @@ def process_batch(spark: SparkSession, batch_df, batch_id: int, args: argparse.N
     gold_table_full = f"{args.gold_db}.{args.gold_table}"
     dim_account_table = f"{args.gold_db}.dim_account"
 
-    batch_df.createOrReplaceTempView("loan_kafka_batch")
+    batch_df.createOrReplaceGlobalTempView("loan_kafka_batch")
 
     loan_schema = """
       loan_id BIGINT,
@@ -181,7 +188,7 @@ def process_batch(spark: SparkSession, batch_df, batch_id: int, args: argparse.N
     FROM (
       SELECT
         from_json(CAST(value AS STRING), '{loan_schema}') AS data
-      FROM loan_kafka_batch
+      FROM global_temp.loan_kafka_batch
     ) src
     WHERE data.loan_id IS NOT NULL
       AND data.amount > 0
@@ -233,6 +240,9 @@ def main() -> None:
 
     spark = (
         SparkSession.builder.appName("berka_fact_loan_streaming")
+        .config("spark.executor.instances", "1")
+        .config("spark.dynamicAllocation.enabled", "false")
+        .config("spark.security.credentials.hiveserver2.enabled", "false")
         .enableHiveSupport()
         .getOrCreate()
     )
@@ -242,6 +252,13 @@ def main() -> None:
     stream_df = (
         spark.readStream.format("kafka")
         .option("kafka.bootstrap.servers", args.bootstrap_servers)
+        .option("kafka.security.protocol", "SASL_SSL")
+        .option("kafka.sasl.mechanism", "PLAIN")
+        .option(
+            "kafka.sasl.jaas.config",
+            'org.apache.kafka.common.security.plain.PlainLoginModule required '
+            'username="manishm" password="Cloudera@123";',
+        )
         .option("subscribe", args.loan_topic)
         .option("startingOffsets", "earliest")
         .load()
@@ -261,4 +278,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
