@@ -261,3 +261,25 @@ TBLPROPERTIES (
 AS
 SELECT * FROM gold_stage.fact_trans_stage;
 
+-- ---------------------------------------------------------------------------
+-- Data validation: Check row counts in gold tables
+-- ---------------------------------------------------------------------------
+
+-- Dimensions
+SELECT 'dim_district' AS table_name, COUNT(*) AS row_count FROM gold.dim_district
+UNION ALL
+SELECT 'dim_client' AS table_name, COUNT(*) AS row_count FROM gold.dim_client
+UNION ALL
+SELECT 'dim_account' AS table_name, COUNT(*) AS row_count FROM gold.dim_account
+UNION ALL
+SELECT 'dim_disp' AS table_name, COUNT(*) AS row_count FROM gold.dim_disp
+UNION ALL
+SELECT 'dim_card' AS table_name, COUNT(*) AS row_count FROM gold.dim_card
+UNION ALL
+-- Facts
+SELECT 'fact_loan' AS table_name, COUNT(*) AS row_count FROM gold.fact_loan
+UNION ALL
+SELECT 'fact_order' AS table_name, COUNT(*) AS row_count FROM gold.fact_order
+UNION ALL
+SELECT 'fact_trans' AS table_name, COUNT(*) AS row_count FROM gold.fact_trans
+ORDER BY table_name;
