@@ -11,22 +11,25 @@ This "poor man's" service:
 
 You can also run it as a standalone Flask service for local testing:
 
-  python3 cml/realtime_scoring_service.py \\
-    --model-path cml/models/loan_default_model_run_0.pt \\
+  python3 cml/realtime_scoring_service.py \
+    --model-path cml/models/loan_default_model_run_0.pt \
     --host 0.0.0.0 --port 5000
 
 Then:
-  curl -X POST http://localhost:5000/score \\
-    -H 'Content-Type: application/json' \\
+  curl -X POST http://localhost:5000/score \
+    -H 'Content-Type: application/json' \
     -d '{"amount": 100000, "duration": 24, "payments": 4500}'
 """
 
 import argparse
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Union
 
 import torch
 from flask import Flask, jsonify, request
+
+from cml.model_definitions import LoanNet
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,8 +62,6 @@ def load_model(model_path: str):
     idx_to_status = {int(k): v for k, v in checkpoint["idx_to_status"].items()}
     hidden_dim = checkpoint["hidden_dim"]
 
-    from train_loan_default_pytorch import LoanNet  # type: ignore
-
     num_features = 3
     num_classes = len(idx_to_status)
     model = LoanNet(num_features, hidden_dim, num_classes)
@@ -72,6 +73,9 @@ def load_model(model_path: str):
 # Global model state for CML-style scoring.
 MODEL = None
 IDX_TO_STATUS: Dict[int, str] = {}
+DEFAULT_MODEL_PATH = Path(
+    os.environ.get("DEFAULT_MODEL_PATH", "cml/models/loan_default_model_run_1.pt")
+)
 
 
 def init_model(model_path: str | None = None) -> None:
@@ -85,6 +89,8 @@ def init_model(model_path: str | None = None) -> None:
         return
 
     path = model_path or os.environ.get("MODEL_PATH")
+    if not path and DEFAULT_MODEL_PATH.exists():
+        path = str(DEFAULT_MODEL_PATH)
     if not path:
         raise RuntimeError("Model path must be provided via argument or MODEL_PATH env var.")
 

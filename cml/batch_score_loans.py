@@ -4,33 +4,32 @@ Batch scoring script for the Berka loan default model.
 
 This script:
   - Loads a trained PyTorch model saved by `train_loan_default_pytorch.py`.
-  - Reads loan features directly from the gold Iceberg table `fact_loan` via Trino.
+  - Reads loan features directly from the gold Iceberg table `fact_loan` via Spark SQL.
   - Writes run-wise predictions back into a gold table (`loan_default_scores`)
     so they can be compared to actuals over time.
 
 Usage:
   python3 cml/batch_score_loans.py \
     --model-path cml/models/loan_default_model_run_0.pt \
-    --trino-host trino-host --trino-port 8080 --trino-user cml \
-    --trino-catalog iceberg --trino-schema gold \
+    --loan-table gold.fact_loan \
+    --scores-table gold.loan_default_scores \
     --run-id "2025-01-01_batch_01"
 """
 
 import argparse
 import os
-from pathlib import Path
-from typing import Dict
+from datetime import datetime
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
-import trino
-from datetime import datetime
+from pyspark.sql import SparkSession
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Batch score loans using a trained PyTorch model (features from gold.fact_loan via Trino)."
+        description="Batch score loans using a trained PyTorch model (features from gold.fact_loan via Spark)."
     )
     parser.add_argument(
         "--model-path",
@@ -38,30 +37,14 @@ def parse_args() -> argparse.Namespace:
         help="Path to the saved model .pt file.",
     )
     parser.add_argument(
-        "--trino-host",
-        required=True,
-        help="Trino coordinator host.",
+        "--loan-table",
+        default="gold.fact_loan",
+        help="Fully-qualified Spark table name containing loan features. Default: gold.fact_loan",
     )
     parser.add_argument(
-        "--trino-port",
-        type=int,
-        default=8080,
-        help="Trino coordinator port. Default: 8080",
-    )
-    parser.add_argument(
-        "--trino-user",
-        default="cml",
-        help="Trino user. Default: cml",
-    )
-    parser.add_argument(
-        "--trino-catalog",
-        default="iceberg",
-        help="Trino catalog for Iceberg tables. Default: iceberg",
-    )
-    parser.add_argument(
-        "--trino-schema",
-        default="gold",
-        help="Trino schema for gold tables. Default: gold",
+        "--scores-table",
+        default="gold.loan_default_scores",
+        help="Fully-qualified Spark table name to store batch scores. Default: gold.loan_default_scores",
     )
     parser.add_argument(
         "--run-id",
@@ -106,17 +89,24 @@ def load_model(model_path: str) -> torch.nn.Module:
     return model
 
 
+def create_spark_session(app_name: str) -> SparkSession:
+    return (
+        SparkSession.builder.appName(app_name)
+        .config("spark.sql.catalog.spark_catalog", "org.apache.iceberg.spark.SparkSessionCatalog")
+        .config("spark.sql.catalog.spark_catalog.type", "hive")
+        .config("spark.security.credentials.hiveserver2.enabled", "false")
+
+        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+        .getOrCreate()
+    )
+
+
 def main() -> None:
     args = parse_args()
 
-    conn = trino.dbapi.connect(
-        host=args.trino_host,
-        port=args.trino_port,
-        user=args.trino_user,
-        catalog=args.trino_catalog,
-        schema=args.trino_schema,
-    )
+    spark = create_spark_session("Berka Loan Batch Scoring")
 
+    loan_table = args.loan_table
     sql = f"""
     SELECT
       loan_id,
@@ -124,14 +114,16 @@ def main() -> None:
       duration,
       payments,
       status
-    FROM fact_loan
+    FROM {loan_table}
     WHERE amount IS NOT NULL
       AND duration IS NOT NULL
       AND payments IS NOT NULL
       AND status IS NOT NULL
-    LIMIT {args.limit}
     """
-    df = pd.read_sql(sql, conn)
+    if args.limit and args.limit > 0:
+        sql += f"\n    LIMIT {args.limit}"
+
+    df = spark.sql(sql).toPandas()
     feature_cols = ["amount", "duration", "payments"]
     X = df[feature_cols].astype(float).values
 
@@ -152,60 +144,78 @@ def main() -> None:
         probs = torch.softmax(logits, dim=1).numpy()
         preds = probs.argmax(axis=1)
 
-    idx_to_status = {int(k): v for k, v in idx_to_status.items()}
     pred_labels = [idx_to_status[int(i)] for i in preds]
 
-    # Prepare run metadata.
     run_id = args.run_id or datetime.utcnow().isoformat(timespec="seconds")
     score_timestamp = datetime.utcnow().isoformat(timespec="seconds")
-
-    # Build INSERT statements to write into gold.loan_default_scores.
-    # Table schema:
-    #   loan_id BIGINT,
-    #   score_timestamp TIMESTAMP,
-    #   run_id VARCHAR,
-    #   actual_status VARCHAR,
-    #   pred_status VARCHAR,
-    #   probabilities_json VARCHAR
 
     def esc(val: str) -> str:
         return val.replace("'", "''")
 
-    cur = conn.cursor()
-    create_sql = """
-    CREATE TABLE IF NOT EXISTS loan_default_scores (
+    scores_table = args.scores_table
+
+    create_sql = f"""
+    CREATE TABLE IF NOT EXISTS {scores_table} (
       loan_id BIGINT,
       score_timestamp TIMESTAMP,
-      run_id VARCHAR,
-      actual_status VARCHAR,
-      pred_status VARCHAR,
-      probabilities_json VARCHAR
+      run_id STRING,
+      actual_status STRING,
+      pred_status STRING,
+      probabilities_json STRING
+    )
+    USING iceberg
+    TBLPROPERTIES (
+      'write.format.default' = 'parquet',
+      'write.parquet.compression-codec' = 'snappy'
     )
     """
-    cur.execute(create_sql)
+    spark.sql(create_sql)
 
-    values = []
+    rows: List[Tuple[int, str, str, str, str, str]] = []
     for i, row in df.iterrows():
         loan_id = int(row["loan_id"])
         actual_status = str(row["status"])
         pred_status = pred_labels[i]
         prob_dict = {idx_to_status[j]: float(probs[i, j]) for j in range(num_classes)}
         prob_json = esc(pd.io.json.dumps(prob_dict)) if hasattr(pd.io, "json") else esc(str(prob_dict))
-        values.append(
-            f"({loan_id}, TIMESTAMP '{score_timestamp}', '{esc(run_id)}', "
-            f"'{esc(actual_status)}', '{esc(pred_status)}', '{prob_json}')"
+        rows.append(
+            (
+                loan_id,
+                score_timestamp,
+                run_id,
+                actual_status,
+                pred_status,
+                prob_json,
+            )
         )
 
-    if values:
-        insert_sql = (
-            "INSERT INTO loan_default_scores "
-            "(loan_id, score_timestamp, run_id, actual_status, pred_status, probabilities_json) VALUES "
-            + ",\n".join(values)
-        )
-        cur.execute(insert_sql)
-        print(f"Wrote {len(values)} prediction rows to gold.loan_default_scores (run_id={run_id}).")
-    else:
+    if not rows:
         print("No rows to score; nothing written.")
+        return
+
+    scores_df = spark.createDataFrame(
+        rows,
+        schema=[
+            "loan_id",
+            "score_timestamp",
+            "run_id",
+            "actual_status",
+            "pred_status",
+            "probabilities_json",
+        ],
+    )
+
+    scores_df = scores_df.selectExpr(
+        "CAST(loan_id AS BIGINT) AS loan_id",
+        "TO_TIMESTAMP(score_timestamp) AS score_timestamp",
+        "CAST(run_id AS STRING) AS run_id",
+        "CAST(actual_status AS STRING) AS actual_status",
+        "CAST(pred_status AS STRING) AS pred_status",
+        "CAST(probabilities_json AS STRING) AS probabilities_json",
+    )
+
+    scores_df.write.mode("append").saveAsTable(scores_table)
+    print(f"Wrote {len(rows)} prediction rows to {scores_table} (run_id={run_id}).")
 
 
 if __name__ == "__main__":

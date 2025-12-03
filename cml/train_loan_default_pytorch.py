@@ -3,15 +3,14 @@
 Quick & dirty ML training script for the Berka loan default use case.
 
 This script:
-  - Queries the `gold.fact_loan` Iceberg table via Trino as a tabular dataset.
+  - Queries the `gold.fact_loan` Iceberg table via Spark SQL.
   - Builds a small PyTorch feed‑forward network to predict loan status.
   - Runs a few experimental runs with different hyperparameters.
   - Logs parameters, metrics and the best model to MLflow.
 
 Usage (example):
   python3 cml/train_loan_default_pytorch.py \
-    --trino-host trino-host --trino-port 8080 --trino-user cml \
-    --trino-catalog iceberg --trino-schema gold \
+    --loan-table gold.fact_loan \
     --mlflow-experiment "berka_loan_default" \
     --max-runs 3
 
@@ -20,9 +19,11 @@ Requirements:
   - numpy
   - torch
   - mlflow
+  - pyspark
 """
 
 import argparse
+import logging
 import os
 from pathlib import Path
 from typing import Dict, Tuple
@@ -33,40 +34,28 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from impala.dbapi import connect as impala_connect
 from torch.utils.data import DataLoader, TensorDataset, random_split
 
-import trino
+from cml.model_definitions import LoanNet
+
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train a simple PyTorch model to predict loan status on the Berka dataset (from gold.fact_loan via Trino)."
+        description="Train a simple PyTorch model to predict loan status on the Berka dataset (from gold.fact_loan via Spark)."
     )
     parser.add_argument(
-        "--trino-host",
-        required=True,
-        help="Trino coordinator host.",
+        "--loan-table",
+        default="gold.fact_loan",
+        help="Fully-qualified Spark table name containing loan features. Default: gold.fact_loan",
     )
     parser.add_argument(
-        "--trino-port",
+        "--sample-limit",
         type=int,
-        default=8080,
-        help="Trino coordinator port. Default: 8080",
-    )
-    parser.add_argument(
-        "--trino-user",
-        default="cml",
-        help="Trino user. Default: cml",
-    )
-    parser.add_argument(
-        "--trino-catalog",
-        default="iceberg",
-        help="Trino catalog for Iceberg tables. Default: iceberg",
-    )
-    parser.add_argument(
-        "--trino-schema",
-        default="gold",
-        help="Trino schema for gold tables. Default: gold",
+        default=None,
+        help="Optional maximum number of rows to train on. Default: all rows.",
     )
     parser.add_argument(
         "--mlflow-experiment",
@@ -85,45 +74,49 @@ def parse_args() -> argparse.Namespace:
         help="Number of experimental runs with different hyperparameters. Default: 3",
     )
     return parser.parse_args()
-
-
-class LoanNet(nn.Module):
-    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int) -> None:
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
 def load_and_prepare_data(args: argparse.Namespace) -> Tuple[TensorDataset, Dict[int, str]]:
-    conn = trino.dbapi.connect(
-        host=args.trino_host,
-        port=args.trino_port,
-        user=args.trino_user,
-        catalog=args.trino_catalog,
-        schema=args.trino_schema,
-    )
-
-    sql = """
+    base_query = f"""
     SELECT
       amount,
       duration,
       payments,
       status
-    FROM fact_loan
+    FROM {args.loan_table}
     WHERE amount IS NOT NULL
       AND duration IS NOT NULL
       AND payments IS NOT NULL
       AND status IS NOT NULL
     """
-    df = pd.read_sql(sql, conn)
+    if args.sample_limit is not None and args.sample_limit > 0:
+        base_query += f"\n    LIMIT {args.sample_limit}"
+
+    conn = None
+    impala_host = os.getenv(
+        "IMPALA_HOST", "coordinator-maybank-impala.dw-maybank1-cdp-env.xfaz-gdb4.cloudera.site"
+    )
+    impala_port = int(os.getenv("IMPALA_PORT", "443"))
+    impala_user = os.getenv("IMPALA_USERNAME", "manishm")
+    impala_password = os.getenv("IMPALA_PASSWORD", "Cloudera@123")
+    http_path = os.getenv("IMPALA_HTTP_PATH", "cliservice")
+
+    try:
+        conn = impala_connect(
+            host=impala_host,
+            port=impala_port,
+            use_ssl=True,
+            auth_mechanism="LDAP",
+            user=impala_user,
+            password=impala_password,
+            use_http_transport=True,
+            http_path=f"/{http_path}" if not http_path.startswith("/") else http_path,
+        )
+        df = pd.read_sql(base_query, conn)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception as close_err:  # pragma: no cover - defensive guard
+                logger.warning("Failed to close Impala connection cleanly: %s", close_err)
 
     feature_cols = ["amount", "duration", "payments"]
 
