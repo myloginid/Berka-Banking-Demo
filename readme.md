@@ -346,6 +346,112 @@ erDiagram
 
 ---
 
+### 4.2 Gold Star Schema (Dimensions and Facts)
+
+This ER view focuses only on the curated **gold** layer and shows how the
+dimensions relate to the three fact tables: `fact_loan`, `fact_order`,
+and `fact_trans`.
+
+```mermaid
+erDiagram
+    %% Dim–dim relationships
+    DIM_DISTRICT ||--o{ DIM_CLIENT  : "home district"
+    DIM_DISTRICT ||--o{ DIM_ACCOUNT : "account district"
+
+    DIM_CLIENT  ||--o{ DIM_DISP     : "has disposition"
+    DIM_ACCOUNT ||--o{ DIM_DISP     : "is held by"
+    DIM_DISP    ||--o{ DIM_CARD     : "has card"
+
+    %% Dim–fact relationships
+    DIM_ACCOUNT ||--o{ FACT_LOAN    : "loan on account"
+    DIM_ACCOUNT ||--o{ FACT_ORDER   : "order on account"
+    DIM_ACCOUNT ||--o{ FACT_TRANS   : "transaction on account"
+
+    DIM_CLIENT  ||--o{ FACT_LOAN    : "borrower"
+    DIM_CLIENT  ||--o{ FACT_ORDER   : "payer"
+    DIM_CLIENT  ||--o{ FACT_TRANS   : "owner"
+
+    DIM_DISTRICT ||--o{ FACT_LOAN   : "by district"
+    DIM_DISTRICT ||--o{ FACT_ORDER  : "by district"
+    DIM_DISTRICT ||--o{ FACT_TRANS  : "by district"
+
+    DIM_DISP ||--o{ FACT_LOAN       : "via disposition"
+    DIM_DISP ||--o{ FACT_ORDER      : "via disposition"
+    DIM_DISP ||--o{ FACT_TRANS      : "via disposition"
+
+    %% Table definitions
+    DIM_DISTRICT {
+      int    district_id
+      string region
+      string district_name
+      boolean is_current
+    }
+    DIM_CLIENT {
+      int    client_id
+      int    district_id
+      string birth_number
+      boolean is_current
+    }
+    DIM_ACCOUNT {
+      int    account_id
+      int    district_id
+      string frequency
+      date   open_date
+      boolean is_current
+    }
+    DIM_DISP {
+      int    disp_id
+      int    client_id
+      int    account_id
+      string type
+      boolean is_current
+    }
+    DIM_CARD {
+      int    card_id
+      int    disp_id
+      string type
+      date   issued
+      boolean is_current
+    }
+    FACT_LOAN {
+      bigint loan_id
+      int    account_id
+      int    client_id
+      int    disp_id
+      int    district_id
+      date   loan_date
+      double amount
+      int    duration
+      double payments
+      string status
+    }
+    FACT_ORDER {
+      bigint order_id
+      int    account_id
+      int    client_id
+      int    disp_id
+      int    district_id
+      date   order_date
+      double amount
+      string k_symbol
+    }
+    FACT_TRANS {
+      bigint trans_id
+      int    account_id
+      int    client_id
+      int    disp_id
+      int    district_id
+      date   trans_date
+      string trans_type
+      string operation
+      double amount
+      double balance
+      string k_symbol
+    }
+```
+
+---
+
 ## 5. Dimension Pipelines
 
 All dimension ETL jobs live under `scripts/etl` and use Spark SQL only.
