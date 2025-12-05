@@ -32,6 +32,7 @@ classDef deepTwilight fill:#110046,stroke:#100045,stroke-width:2px,color:#FFFFFF
 classDef linkNode fill:#FFFFFF,stroke:#8789FB,stroke-width:2px,color:#8789FB;
 classDef visitedLinkNode fill:#FFFFFF,stroke:#26177B,stroke-width:2px,color:#26177B;
 classDef default text-align:center;
+classDef lineageNode fill:#FFFFFF,stroke:#FF550C,stroke-width:2px,stroke-dasharray: 4 2,color:#FF550C;
 
     %% ADLS staging
     subgraph ADLS["Azure Storge - ADLS Gen2"]
@@ -89,6 +90,13 @@ classDef default text-align:center;
 
     DIMS_GOLD ==> ML
     FACTS_GOLD ==> ML
+
+    %% Governance & Lineage (Open Metadata + Ranger)
+    subgraph GOV["Governance & Lineage"]
+      direction LR
+      RANGER["Cloudera Ranger<br>Access Control,<br>Audits,Access Logs"]:::lineageNode
+      OMD["Open Metadata (OMD)<br>Lineage & Catalog"]:::lineageNode
+    end
 
     %% Iceberg REST catalog → AWS Athena
     subgraph SHARING["Iceberg REST Sharing"]
