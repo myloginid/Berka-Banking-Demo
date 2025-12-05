@@ -83,7 +83,7 @@ classDef default text-align:center;
 
     %% ML tooling
     subgraph ML["ML / Data Science"]
-      CML["Cloudera Machine<br>Learning (CML)"]
+      CML["Cloudera AI"]
       DATAIKU["Dataiku"]
     end
 
