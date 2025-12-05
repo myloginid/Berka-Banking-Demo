@@ -4,7 +4,107 @@ This project demonstrates an end‑to‑end banking data pipeline on CDP Public 
 
 ---
 
-## 1. Repository Layout
+## 1. End‑to‑End Platform Flow (Dim & Fact Pipelines)
+
+The diagram below summarizes how data flows across the proposed Maybank Platform:
+
+Data in Iceberg gold tables are queried by BI / ML tools and can be shared externally via the Iceberg REST catalog.
+
+```mermaid
+%%{
+  init: {
+    "wrap": true,                 /* global wrap */
+    "flowchart": {
+      "nodeSpacing": 50,
+      "rankSpacing": 60,
+      "wrappingWidth": 180        /* controls auto-wrap width */
+    },
+    "themeVariables": {
+      "lineWidth": 10
+    }
+  }
+}%%
+flowchart LR
+classDef default fill:#FF550C,stroke:#FE773C,stroke-width:2px,color:#FFFFFF;
+classDef primaryOrange fill:#FF550C,stroke:#FE773C,stroke-width:2px,color:#FFFFFF;
+classDef accentBlue fill:#5555F9,stroke:#26177B,stroke-width:2px,color:#FFFFFF;
+classDef deepTwilight fill:#110046,stroke:#100045,stroke-width:2px,color:#FFFFFF;
+classDef linkNode fill:#FFFFFF,stroke:#8789FB,stroke-width:2px,color:#8789FB;
+classDef visitedLinkNode fill:#FFFFFF,stroke:#26177B,stroke-width:2px,color:#26177B;
+classDef default text-align:center;
+
+    %% ADLS staging
+    subgraph ADLS["Azure Storge - ADLS Gen2"]
+      ADLS_DIMS["Staging Layer for Ingestion<br>of Dimensions and Facts"]
+    end
+
+    %% Dimension pipeline (batch)
+    subgraph DIMS["Batch Pipeline using<br>Nifi and Spark"]
+      DIMS_NIFI["NiFi Ingestion <br>to Bronze tables"]
+      DIMS_BRONZE[("Bronze Tables<br>bronze.district<br>bronze.client<br>bronze.account<br>bronze.disp<br>bronze.card")]
+      DIMS_SPARK["Spark Batch Jobs<br>Bonze -> Silver<br>Data Quality Checks"]
+      DIMS_SILVER[("Silver Tables<br>silver.district<br>silver.client<br>silver.account<br>silver.disp<br>silver.card")]
+      DIMS_SPARK2["Spark Batch Jobs<br>Silver -> Gold<br>Dimension Load Jobs"]
+      DIMS_GOLD[("Gold Dimension<br>Iceberg Tables<br>dim_district<br>dim_client<br>dim_account<br>dim_disp<br>dim_card")]
+
+      ADLS_DIMS ==> DIMS_NIFI ==> DIMS_BRONZE ==> DIMS_SPARK
+      DIMS_SPARK ==> DIMS_SILVER ==> DIMS_SPARK2 ==> DIMS_GOLD
+    end
+
+    %% Fact Pipeline Real Time using Nifi, Kafka and Spark
+    subgraph FACTS["Real time Fact Pipeline<br>using Nifi, Kafka and Spark"]
+      FACTS_NIFI["NiFi Ingestion<br>to Kafka"]
+      FACTS_KAFKA["Kafka Topics<br>berka_loans<br>berka_orders<br>berka_trans"]
+      FACTS_SPARK["Spark Structured<br>Streaming Jobs"]
+      FACTS_BRONZE[("Bronze Facts<br>bronze.loan_bronze<br>bronze.order_bronze<br>bronze.trans_bronze")]
+      FACTS_SILVER[("Silver Facts<br>silver.loan_silver<br>silver.order_silver<br>silver.trans_silver")]
+      FACTS_GOLD[("Gold Facts<br>Iceberg Tables<br>fact_loan<br>fact_order<br>fact_trans")]
+
+      ADLS_DIMS ==> FACTS_NIFI ==> FACTS_KAFKA ==> FACTS_SPARK
+      FACTS_SPARK ==> FACTS_BRONZE ==> FACTS_SILVER ==> FACTS_GOLD
+    end
+
+    %% BI Query Engines
+    subgraph BI["BI Query Engines"]
+      IMPALA["Impala"]
+      TRINO["Trino"]
+    end
+
+    %% BI Vizualization
+    subgraph VIZ["BI Vizualization"]
+      direction TB
+      PBI["Power BI"]
+      DATAVIZ["Cloudera Data Vizualization"]
+    end
+
+    DIMS_GOLD ==> BI
+    FACTS_GOLD ==> BI
+    BI ==> VIZ
+
+    %% ML tooling
+    subgraph ML["ML / Data Science"]
+      CML["Cloudera Machine<br>Learning (CML)"]
+      DATAIKU["Dataiku"]
+    end
+
+    DIMS_GOLD ==> ML
+    FACTS_GOLD ==> ML
+
+    %% Iceberg REST catalog → AWS Athena
+    subgraph SHARING["Iceberg REST Sharing"]
+      direction LR
+      REST_CATALOG["Iceberg REST<br> Catalog"]
+      ATHENA["AWS Athena<br>Iceberg Data Sharing"]
+    end
+
+    DIMS_GOLD ==> SHARING
+    FACTS_GOLD ==> SHARING
+    REST_CATALOG ==> ATHENA
+```
+
+---
+
+## 2. Repository Layout
 
 ```text
 .
@@ -31,7 +131,7 @@ This project demonstrates an end‑to‑end banking data pipeline on CDP Public 
 
 ---
 
-## 2. Source Dataset (`./data`)
+## 3. Source Dataset (`./data`)
 
 The Berka dataset is a collection of Czech bank data: customers, accounts, transactions, loans, cards, and districts.
 
@@ -116,7 +216,7 @@ These structures form the core relational model for the POC: clients live in dis
 
 ---
 
-## 3. Core Logical ER Model
+## 4. Core Logical ER Model
 
 At a logical level:
 - `district` defines geographic areas for both `client` and `account`.  
@@ -199,7 +299,7 @@ erDiagram
 
 ---
 
-## 4. Lakehouse Architecture (Bronze / Silver / Gold)
+## 5. Lakehouse Architecture (Bronze / Silver / Gold)
 
 The same entities are modeled across:
 - **Bronze** – raw/staged (NiFi‑landed CSVs and Kafka streams).  
@@ -452,7 +552,7 @@ erDiagram
 
 ---
 
-## 5. Dimension Pipelines
+## 6. Dimension Pipelines
 
 All dimension ETL jobs live under `scripts/etl` and use Spark SQL only.
 
@@ -539,7 +639,7 @@ flowchart TD
 
 ---
 
-## 6. Streaming Pipelines (Kafka → Silver → Gold)
+## 7. Streaming Pipelines (Kafka → Silver → Gold)
 
 ### 6.1 Kafka Data Generator
 
@@ -628,7 +728,7 @@ Recommended runtime order:
 
 ---
 
-## 7. Customer 360 (HBase)
+## 8. Customer 360 (HBase)
 
 To demonstrate a real-time Customer 360 view, a dedicated streaming job consumes live loan, order, and transaction events, enriches them with Iceberg dimensions, and writes one row per customer into HBase via REST.
 
@@ -680,7 +780,7 @@ flowchart TD
 
 ---
 
-## 8. Machine Learning Pipeline (CML + MLflow)
+## 9. Machine Learning Pipeline (CML + MLflow)
 
 A simple “poor man’s” ML pipeline uses CML notebooks/scripts, PyTorch, Trino, and MLflow to train and serve a loan default classifier.
 
